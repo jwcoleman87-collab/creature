@@ -216,6 +216,60 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .gauge-marker { position: absolute; top: -4px; width: 16px; height: 16px; border-radius: 50%; background: white; transform: translateX(-50%); transition: left 1s; box-shadow: 0 0 6px rgba(255,255,255,0.5); }
   .gauge-adj { font-size: 13px; font-family: 'Share Tech Mono', monospace; margin-top: 6px; }
 
+  /* ── Bloomberg Ticker ── */
+  .ticker-wrap {
+    background: #1a1a1a;
+    border: 1px solid #ff8c00;
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+  }
+  .ticker-label {
+    background: #ff8c00;
+    color: #000;
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 2px;
+    padding: 0 12px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .ticker-track {
+    display: flex;
+    overflow: hidden;
+    flex: 1;
+  }
+  .ticker-inner {
+    display: flex;
+    animation: ticker-scroll 40s linear infinite;
+    white-space: nowrap;
+  }
+  .ticker-inner:hover { animation-play-state: paused; }
+  @keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+  .ticker-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 20px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 12px;
+    border-right: 1px solid #333;
+  }
+  .ticker-sym  { color: #ff8c00; font-weight: 700; }
+  .ticker-price { color: #fff; }
+  .ticker-up   { color: #00ff88; }
+  .ticker-down { color: #ff4444; }
+  .ticker-arrow { font-size: 10px; }
+
   /* ── Footer ── */
   .footer { text-align: center; color: var(--dim); font-size: 11px; letter-spacing: 2px; padding: 12px; }
 
@@ -251,6 +305,16 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
   <div id="status-pill" class="status-pill pill-starting">STARTING</div>
   <div class="last-update">Updated: <span id="last-update">—</span></div>
+</div>
+
+<!-- Bloomberg Ticker -->
+<div class="ticker-wrap">
+  <div class="ticker-label">▶ LIVE</div>
+  <div class="ticker-track">
+    <div class="ticker-inner" id="ticker-inner">
+      <div class="ticker-item"><span class="ticker-sym">LOADING</span><span class="ticker-price">—</span></div>
+    </div>
+  </div>
 </div>
 
 <!-- Vitals -->
@@ -496,6 +560,29 @@ function render(d) {
         <td class="dim">${(t.exit||'—').replace('_',' ')}</td>
       </tr>`;
     }).join('');
+  }
+}
+
+  // Ticker
+  const prices = d.prices || {};
+  const syms   = Object.keys(prices);
+  if (syms.length > 0) {
+    const items = syms.map(sym => {
+      const p    = prices[sym];
+      const chg  = p.change_pct || 0;
+      const dir  = chg >= 0 ? 'up' : 'down';
+      const arrow = chg >= 0 ? '▲' : '▼';
+      const price = p.price >= 1 ? '$' + Number(p.price).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})
+                                 : '$' + Number(p.price).toFixed(5);
+      return `<div class="ticker-item">
+        <span class="ticker-sym">${sym.replace('/USD','')}</span>
+        <span class="ticker-price">${price}</span>
+        <span class="ticker-${dir} ticker-arrow">${arrow} ${Math.abs(chg).toFixed(2)}%</span>
+      </div>`;
+    }).join('');
+    // Duplicate for seamless loop
+    const el = document.getElementById('ticker-inner');
+    el.innerHTML = items + items;
   }
 }
 

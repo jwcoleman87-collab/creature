@@ -51,6 +51,7 @@ _state = {
         "action":      "waiting",
     },
     "thinking":       [],   # ring buffer of last 60 thoughts
+    "prices":         {},   # { "BTC/USD": {"price": 84234.5, "change_pct": -2.3} }
 }
 
 

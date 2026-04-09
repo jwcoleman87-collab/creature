@@ -193,6 +193,17 @@ def main():
             bars_data  = scanner.get_all_bars(UNIVERSE, limit=200)
             candidates = scanner.scan(bars_data=bars_data)
 
+            # ── Push live prices into dashboard (for ticker) ───────────────────
+            prices = {}
+            for sym, bars in bars_data.items():
+                if bars and len(bars) >= 2:
+                    latest = float(bars[-1].close)
+                    prev   = float(bars[-2].close)
+                    chg    = ((latest - prev) / prev * 100) if prev > 0 else 0.0
+                    prices[sym] = {"price": round(latest, 4), "change_pct": round(chg, 2)}
+            if prices:
+                dash.update("prices", prices)
+
             # ── Push sentiment into dashboard ──────────────────────────────────
             sentiment_info = scanner.get_sentiment_info()
             dash.update("sentiment", sentiment_info)
