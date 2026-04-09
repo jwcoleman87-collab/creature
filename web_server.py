@@ -449,10 +449,11 @@ function render(d) {
 
   // Balance
   const bal = d.balance || {};
-  document.getElementById('balance').textContent = '$' + fmt(bal.current);
+  document.getElementById('balance').textContent = '$' + fmt(bal.equity ?? bal.current);
   const pnl = bal.pnl || 0;
   const pnlEl = document.getElementById('pnl');
-  pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2) + ' / ' + fmt(bal.pnl_pct) + '%';
+  const cashStr = bal.cash !== undefined ? ` | Cash $${fmt(bal.cash)}` : '';
+  pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2) + ' / ' + fmt(bal.pnl_pct) + '%' + cashStr;
   pnlEl.className   = 'card-sub ' + (pnl >= 0 ? 'green' : 'red');
 
   // Health

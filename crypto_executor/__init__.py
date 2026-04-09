@@ -103,6 +103,20 @@ def get_open_symbols() -> list:
     return list(_open_positions.keys())
 
 
+def get_account_balance() -> dict | None:
+    """Fetch live cash balance and equity from Alpaca."""
+    try:
+        acct = _trading_client.get_account()
+        return {
+            "cash":          round(float(acct.cash), 2),
+            "equity":        round(float(acct.equity), 2),
+            "buying_power":  round(float(acct.buying_power), 2),
+        }
+    except Exception as e:
+        print(f"[Executor] Account fetch failed: {e}")
+        return None
+
+
 def get_open_position_summary() -> dict | None:
     """Return a dashboard-friendly summary of the first open position, or None."""
     if not _open_positions:

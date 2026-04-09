@@ -190,6 +190,22 @@ def main():
             print(f"\n[Main] ── Scan cycle @ {ts} ─────────────────────────────")
 
             # Fetch bars once — reused by scanner AND backtester (no double fetch)
+            # ── Pull live balance from Alpaca ─────────────────────────────────
+            acct = executor.get_account_balance()
+            if acct:
+                starting = 500.0
+                equity   = acct["equity"]
+                organism.state["current_balance"] = equity
+                dash.update("balance", {
+                    "current":  equity,
+                    "peak":     max(organism.state["peak_equity"], equity),
+                    "starting": starting,
+                    "pnl":      round(equity - starting, 2),
+                    "pnl_pct":  round((equity - starting) / starting * 100, 2),
+                    "cash":     acct["cash"],
+                    "buying_power": acct["buying_power"],
+                })
+
             bars_data  = scanner.get_all_bars(UNIVERSE, limit=200)
             candidates = scanner.scan(bars_data=bars_data)
 
@@ -317,6 +333,9 @@ def main():
                                 else:
                                     dash.think(f"Position OPEN: {best.symbol}", "trade")
                                     dash.update("open_position", executor.get_open_position_summary())
+                                    # Update today's trade count immediately on entry
+                                    organism.state["today_trades"] = organism.state.get("today_trades", 0) + 1
+                                    dash.sync_from_organism(organism)
                                 # NOTE: No use_slot() here — we trade as often as
                                 # health allows. Daily loss limit in metabolism
                                 # will block via slot flags if stop is hit.
