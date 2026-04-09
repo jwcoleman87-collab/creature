@@ -24,17 +24,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
 
   :root {
-    --bg:       #050508;
-    --panel:    #0d0d1a;
-    --border:   #1a1a35;
+    --bg:       #c8cdd2;
+    --panel:    #dde1e5;
+    --border:   #b0b8bf;
     --green:    #00ff88;
     --red:      #ff3355;
     --amber:    #ffb800;
     --blue:     #4488ff;
     --purple:   #aa55ff;
-    --dim:      #444466;
-    --text:     #ccd6f6;
-    --text-dim: #667799;
+    --dim:      #555e66;
+    --text:     #1a2028;
+    --text-dim: #4a5560;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -525,3 +525,15 @@ def start():
     thread.start()
     print(f"[Dashboard] Live at port {port}")
     return server
+
+
+if __name__ == "__main__":
+    import time
+    srv = start()
+    print("Press Ctrl+C to stop.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        srv.shutdown()
+        print("Dashboard stopped.")
