@@ -222,10 +222,13 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     border: 1px solid #ff8c00;
     border-radius: 6px;
     overflow: hidden;
-    margin-bottom: 16px;
     height: 36px;
     display: flex;
     align-items: center;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    margin-bottom: 16px;
   }
   .ticker-label {
     background: #ff8c00;
