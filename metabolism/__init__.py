@@ -172,9 +172,9 @@ class Metabolism:
         except Exception:
             win_rate, expectancy = 0.0, 0.0
 
-        if total <= 20:
+        if total <= 5:
             new_phase = "newborn"
-        elif total <= 100:
+        elif total <= 30:
             new_phase = "developing" if (win_rate > 0.45 and expectancy > 0) else "newborn"
         else:
             new_phase = "mature" if (win_rate > 0.50 and expectancy > 0.5) else "developing"
