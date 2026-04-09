@@ -418,6 +418,15 @@ async function refresh() {
   }
 }
 
+// Show a live clock so the user knows the page is alive
+function liveClock() {
+  const el = document.getElementById('last-update');
+  if (el && el.textContent === '—') {
+    el.textContent = 'connecting...';
+  }
+}
+setInterval(liveClock, 1000);
+
 function fmt(n, dec=2) { return n !== null && n !== undefined ? Number(n).toFixed(dec) : '—'; }
 function fmtPct(n) { return n !== null && n !== undefined ? Number(n).toFixed(1)+'%' : '—'; }
 
@@ -589,9 +598,9 @@ function render(d) {
   }
 }
 
-// Initial load + auto-refresh every 30 seconds
+// Initial load + auto-refresh every 10 seconds
 refresh();
-setInterval(refresh, 30000);
+setInterval(refresh, 10000);
 </script>
 </body>
 </html>"""

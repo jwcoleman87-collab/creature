@@ -57,7 +57,7 @@ class SignalCandidate:
 def get_all_bars(symbols: list, limit: int = 200) -> dict:
     """Fetch 1h bars for all symbols — uses start date to guarantee enough history."""
     try:
-        start = datetime.now(timezone.utc) - timedelta(hours=limit)
+        start = datetime.now(timezone.utc) - timedelta(hours=min(limit, 100))
         req  = CryptoBarsRequest(
             symbol_or_symbols=symbols,
             timeframe=TimeFrame.Hour,
