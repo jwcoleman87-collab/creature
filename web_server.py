@@ -117,7 +117,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .dim    { color: var(--dim); }
 
   /* ── Health bar ── */
-  .health-bar-wrap { margin-top: 8px; background: #111122; border-radius: 4px; height: 4px; }
+  .health-bar-wrap { margin-top: 8px; background: rgba(0,0,0,0.15); border-radius: 4px; height: 4px; }
   .health-bar { height: 4px; border-radius: 4px; transition: width 1s; }
 
   /* ── The Mind ── */
@@ -152,7 +152,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .mind-log::-webkit-scrollbar { width: 4px; }
   .mind-log::-webkit-scrollbar-track { background: transparent; }
   .mind-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  .thought { padding: 3px 0; border-bottom: 1px solid rgba(26,26,53,0.5); }
+  .thought { padding: 3px 0; border-bottom: 1px solid var(--border); }
   .thought .t-time { color: var(--dim); margin-right: 10px; }
   .thought.signal  .t-msg { color: var(--green); }
   .thought.trade   .t-msg { color: var(--amber); }
@@ -196,7 +196,7 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
     letter-spacing: 1px; color: var(--text-dim); border-bottom: 1px solid var(--border);
     font-weight: 400;
   }
-  td { padding: 9px 18px; font-family: 'Share Tech Mono', monospace; font-size: 13px; border-bottom: 1px solid rgba(26,26,53,0.5); }
+  td { padding: 9px 18px; font-family: 'Share Tech Mono', monospace; font-size: 13px; border-bottom: 1px solid var(--border); }
   tr:last-child td { border-bottom: none; }
   .tag {
     display: inline-block; padding: 2px 8px; border-radius: 4px;
@@ -219,10 +219,27 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   /* ── Footer ── */
   .footer { text-align: center; color: var(--dim); font-size: 11px; letter-spacing: 2px; padding: 12px; }
 
+  /* ── Table scroll on small screens ── */
+  .table-panel { overflow-x: auto; }
+
   @media (max-width: 900px) {
     .grid-4 { grid-template-columns: repeat(2,1fr); }
     .grid-3 { grid-template-columns: repeat(2,1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
     .pos-grid { grid-template-columns: repeat(2,1fr); }
+  }
+  @media (max-width: 480px) {
+    body { padding: 10px; }
+    .header { flex-wrap: wrap; gap: 8px; }
+    .last-update { width: 100%; text-align: center; }
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .grid-3 { grid-template-columns: 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .pos-grid { grid-template-columns: repeat(2,1fr); }
+    .card-value { font-size: 22px; }
+    .gauge-value { font-size: 36px; }
+    th, td { padding: 7px 10px; font-size: 12px; }
+    .mind-log { font-size: 12px; height: 180px; }
   }
 </style>
 </head>
@@ -308,8 +325,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="table-panel">
     <div class="table-header">🧠 Asset Intelligence (Learned)</div>
     <table>
-      <thead><tr><th>Pair</th><th>Trades</th><th>Win Rate</th><th>Expectancy</th><th>Status</th></tr></thead>
-      <tbody id="asset-table"><tr><td colspan="5" class="dim">No data yet — trades build this.</td></tr></tbody>
+      <thead><tr><th>Pair</th><th>Score</th><th>Setup</th><th>Regime</th><th>Sentiment</th></tr></thead>
+      <tbody id="asset-table"><tr><td colspan="5" class="dim">No signals yet this cycle.</td></tr></tbody>
     </table>
   </div>
   <div class="table-panel">
@@ -447,20 +464,18 @@ function render(d) {
   const assets = d.asset_scores || [];
   const at = document.getElementById('asset-table');
   if (assets.length === 0) {
-    at.innerHTML = '<tr><td colspan="5" class="dim">No data yet — trades build this.</td></tr>';
+    at.innerHTML = '<tr><td colspan="5" class="dim">No signals yet this cycle.</td></tr>';
   } else {
     at.innerHTML = assets.map(a => {
-      const wr2 = (a.win_rate || 0) * 100;
-      const tag  = a.hard_blocked ? '<span class="tag tag-blocked">BLOCKED</span>'
-                 : wr2 >= 60      ? '<span class="tag tag-boosted">BOOSTED</span>'
-                 : wr2 < 35       ? '<span class="tag tag-loss">PENALISED</span>'
-                 :                  '<span class="tag tag-neutral">LEARNING</span>';
+      const score = a.score || 0;
+      const sentAdj = a.sentiment || 0;
+      const sentClass = sentAdj > 0 ? 'green' : sentAdj < 0 ? 'red' : 'dim';
       return `<tr>
         <td class="green">${a.symbol}</td>
-        <td>${a.total_trades}</td>
-        <td class="${wr2>=50?'green':wr2>=35?'amber':'red'}">${fmtPct(wr2)}</td>
-        <td class="${(a.expectancy_r||0)>=0?'green':'red'}">${fmt(a.expectancy_r,2)}R</td>
-        <td>${tag}</td>
+        <td class="${score>=5?'green':score>=3?'amber':'dim'}">${fmt(score,2)}</td>
+        <td class="dim">${(a.setup||'—').replace('_',' ')}</td>
+        <td class="dim">${a.regime||'—'}</td>
+        <td class="${sentClass}">${sentAdj>=0?'+':''}${fmt(sentAdj,2)}</td>
       </tr>`;
     }).join('');
   }
@@ -472,13 +487,13 @@ function render(d) {
     tt.innerHTML = '<tr><td colspan="5" class="dim">No trades yet.</td></tr>';
   } else {
     tt.innerHTML = trades.map(t => {
-      const win = (t.actual_pnl || 0) > 0;
+      const win = (t.pnl || 0) > 0;
       return `<tr>
-        <td class="green">${t.symbol || 'SPY'}</td>
-        <td class="dim">${(t.setup_type||'—').replace('_',' ')}</td>
-        <td class="${win?'green':'red'}">${win?'+':''}$${fmt(Math.abs(t.actual_pnl||0),4)}</td>
-        <td class="${win?'green':'red'}">${win?'+':''}${fmt(t.actual_pnl_r||0,2)}R</td>
-        <td class="dim">${(t.exit_reason||'—').replace('_',' ')}</td>
+        <td class="green">${t.symbol || '—'}</td>
+        <td class="dim">${(t.direction||'long').toUpperCase()}</td>
+        <td class="${win?'green':'red'}">${win?'+':'-'}$${fmt(Math.abs(t.pnl||0),4)}</td>
+        <td class="${win?'green':'red'}">${win?'+':''}${fmt(t.pnl_r||0,2)}R</td>
+        <td class="dim">${(t.exit||'—').replace('_',' ')}</td>
       </tr>`;
     }).join('');
   }
