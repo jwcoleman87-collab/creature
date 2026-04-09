@@ -39,6 +39,8 @@ from metabolism    import Metabolism
 import crypto_scanner    as scanner
 import crypto_backtester as backtester
 import crypto_executor   as executor
+import dashboard_state   as dash
+import web_server
 
 # ── Constants from constitution (using dot-notation getter, not dict chaining) ─
 SCAN_INTERVAL = get("risk.crypto.scan_interval_seconds", 300)
@@ -49,9 +51,12 @@ UNIVERSE      = get("crypto.universe", [])
 # ── Graceful shutdown ──────────────────────────────────────────────────────────
 def _shutdown(sig, frame):
     print("\n[Creature] Shutdown signal received. Closing all positions...")
+    dash.think("Shutdown signal received — closing all positions.", "warn")
+    dash.update("status", "STOPPING")
     closed = executor.force_close_all("shutdown")
     for t in closed:
         print(f"[Creature] Closed {t['symbol']} | P&L=${t['actual_pnl']:.6f}")
+        dash.think(f"Force-closed {t['symbol']} on shutdown | P&L ${t['actual_pnl']:.4f}", "trade")
     print("[Creature] All positions closed. Goodbye.")
     sys.exit(0)
 
@@ -64,6 +69,7 @@ def _handle_close(trade: dict, organism: Metabolism):
     """Log a closed trade, update organism state, and update learning brain."""
     pnl = trade.get("actual_pnl", 0.0)
     organism.record_trade_outcome(pnl)
+    dash.sync_from_organism(organism)
 
     update_asset_score(trade["symbol"], pnl > 0, trade.get("actual_pnl_r", 0.0))
     update_hourly_performance(
@@ -112,6 +118,14 @@ def main():
     risk     = RiskEngine()
     executor.reconcile_with_alpaca()
 
+    # ── Start web dashboard ────────────────────────────────────────────────────
+    web_server.start()
+    dash.update("status", "ONLINE")
+    dash.sync_from_organism(organism)
+    dash.think("Creature awakens. Initialising systems...", "info")
+    dash.think(f"Universe: {len(UNIVERSE)} pairs | Scan: {SCAN_INTERVAL}s", "info")
+    dash.think(f"Balance: ${organism.state['current_balance']:.2f} | Phase: {organism.state['learning_phase']}", "info")
+
     print(f"[Main] {organism.summary()}\n")
     print("[Main] Running 24/7. Press Ctrl+C or click STOP to halt.\n")
 
@@ -123,9 +137,16 @@ def main():
         # Daily counter reset — checks if calendar date changed, resets if so
         organism.start_of_day()
 
+        # ── Sync dashboard open position ───────────────────────────────────────
+        open_syms = executor.get_open_symbols()
+        if open_syms:
+            # push current open position summary (executor stores full position dict)
+            dash.update("open_position", executor.get_open_position_summary())
+        else:
+            dash.update("open_position", None)
+
         # ── Exit monitoring (every EXIT_INTERVAL seconds) ──────────────────────
         if executor.has_open_position():
-            open_syms    = executor.get_open_symbols()   # via public function, not _private
             current_bars = scanner.get_latest_bars(open_syms)
 
             if not current_bars:
@@ -134,9 +155,30 @@ def main():
                 closed = executor.check_exits(current_bars)
                 for trade in closed:
                     _handle_close(trade, organism)
+                    dash.sync_from_organism(organism)
+                    pnl = trade.get("actual_pnl", 0.0)
+                    emoji = "WIN" if pnl >= 0 else "LOSS"
+                    dash.think(
+                        f"{emoji} | {trade['symbol']} closed | "
+                        f"P&L ${pnl:.4f} | reason: {trade.get('exit_reason', '?')}",
+                        "trade",
+                    )
+                    # Update recent trades list in dashboard
+                    recent = dash.get_state().get("recent_trades", [])
+                    recent.insert(0, {
+                        "symbol":    trade["symbol"],
+                        "direction": "long",
+                        "pnl":       round(pnl, 4),
+                        "pnl_r":     round(trade.get("actual_pnl_r", 0.0), 2),
+                        "exit":      trade.get("exit_reason", "?"),
+                        "time":      datetime.now(timezone.utc).strftime("%H:%M UTC"),
+                    })
+                    dash.update("recent_trades", recent[:20])
 
         # ── Hard stop: organism is dead ────────────────────────────────────────
         if organism.health.state == DEAD:
+            dash.update("status", "DEAD")
+            dash.think("Creature health state: DEAD. Pausing 1 hour.", "error")
             print("[Main] Creature is DEAD. Pausing 1 hour before checking again.")
             time.sleep(3600)
             continue
@@ -151,7 +193,36 @@ def main():
             bars_data  = scanner.get_all_bars(UNIVERSE, limit=200)
             candidates = scanner.scan(bars_data=bars_data)
 
+            # ── Push sentiment into dashboard ──────────────────────────────────
+            sentiment_info = scanner.get_sentiment_info()
+            dash.update("sentiment", sentiment_info)
+            if sentiment_info.get("fear_greed") is not None:
+                dash.think(
+                    f"Fear & Greed: {sentiment_info['fear_greed']} "
+                    f"({sentiment_info['label']}) adj={sentiment_info['adj']:+.2f}",
+                    "info",
+                )
+
+            # ── Update asset intelligence table in dashboard ───────────────────
+            dash.update("asset_scores", [
+                {
+                    "symbol":     c.symbol,
+                    "score":      round(c.final_score, 2),
+                    "setup":      c.setup_type,
+                    "regime":     c.regime,
+                    "sentiment":  round(getattr(c, "sentiment_adj", 0.0), 2),
+                }
+                for c in candidates[:10]
+            ])
+            dash.update("last_scan", {
+                "timestamp":  ts,
+                "candidates": [c.symbol for c in candidates[:5]],
+                "action":     "scanning",
+            })
+            dash.think(f"Scan complete. {len(candidates)} signals found.", "info")
+
             if not candidates:
+                dash.think("No signals above threshold this cycle.", "info")
                 print("[Main] No signals above threshold this cycle.")
             else:
                 best = candidates[0]
@@ -160,10 +231,16 @@ def main():
                     f"score={best.final_score:.2f} | {best.setup_type} | "
                     f"regime={best.regime}"
                 )
+                dash.think(
+                    f"Best signal: {best.symbol} score={best.final_score:.2f} "
+                    f"[{best.setup_type} / {best.regime}]",
+                    "signal",
+                )
 
                 # ── Validate bars exist for this symbol before backtesting ──────
                 if best.symbol not in bars_data or not bars_data[best.symbol]:
                     print(f"[Main] No bar data for {best.symbol} — skipping.")
+                    dash.think(f"No bar data for {best.symbol} — skipping.", "warn")
                     log_skip(best.direction, "no_bar_data", {"symbol": best.symbol})
 
                 else:
@@ -174,8 +251,10 @@ def main():
                         bars_data[best.symbol],
                     )
                     print(f"[Main] Backtest: {bt.reason}")
+                    dash.think(f"Backtest {best.symbol}: {bt.reason}", "info")
 
                     if not bt.passed:
+                        dash.think(f"Backtest FAILED for {best.symbol} — skipping entry.", "warn")
                         log_skip(
                             best.direction,
                             f"backtest_failed: {bt.reason}",
@@ -184,17 +263,15 @@ def main():
 
                     else:
                         # ── Health / fitness gate ──────────────────────────────
-                        # NOTE: slot system not used for crypto — concurrency is
-                        # enforced by has_open_position() below. Daily loss limit
-                        # still applies via record_trade_outcome() → metabolism.
                         fit, reason = organism.is_fit_to_trade(best.direction)
 
                         if not fit:
                             log_skip(best.direction, reason, {"symbol": best.symbol})
+                            dash.think(f"Health gate blocked entry: {reason}", "warn")
                             print(f"[Main] Not fit to trade: {reason}")
 
                         elif executor.has_open_position():
-                            # One position at a time — wait for it to close
+                            dash.think("Already in a position — waiting for exit.", "info")
                             print("[Main] Already in a position — max 1 concurrent.")
 
                         else:
@@ -208,6 +285,7 @@ def main():
                             )
 
                             if not sizing["valid"]:
+                                dash.think(f"Risk sizing invalid: {sizing.get('reason')}", "warn")
                                 log_skip(
                                     best.direction,
                                     f"risk_invalid: {sizing.get('reason')}",
@@ -215,9 +293,19 @@ def main():
                                 )
                             else:
                                 # ── Enter ──────────────────────────────────────
+                                dash.think(
+                                    f"ENTERING {best.symbol} | entry={best.entry_price:.4f} "
+                                    f"stop={best.stop_price:.4f} | "
+                                    f"risk=${sizing.get('dollar_risk', 0):.2f}",
+                                    "trade",
+                                )
                                 position = executor.submit_entry(best, sizing)
                                 if not position:
+                                    dash.think(f"Entry order FAILED for {best.symbol}.", "error")
                                     print(f"[Main] Entry failed for {best.symbol}.")
+                                else:
+                                    dash.think(f"Position OPEN: {best.symbol}", "trade")
+                                    dash.update("open_position", executor.get_open_position_summary())
                                 # NOTE: No use_slot() here — we trade as often as
                                 # health allows. Daily loss limit in metabolism
                                 # will block via slot flags if stop is hit.

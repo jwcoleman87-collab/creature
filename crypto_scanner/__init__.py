@@ -30,7 +30,7 @@ _client = CryptoHistoricalDataClient(
     secret_key=os.getenv("ALPACA_SECRET_KEY"),
 )
 
-_sentiment_cache: dict = {"adj": 0.0, "ts": 0.0}
+_sentiment_cache: dict = {"adj": 0.0, "ts": 0.0, "value": None, "label": "Unknown"}
 
 
 @dataclass
@@ -127,12 +127,21 @@ def fetch_sentiment() -> float:
         else:
             adj = 0.0
 
-        _sentiment_cache = {"adj": adj, "ts": time.time()}
+        _sentiment_cache = {"adj": adj, "ts": time.time(), "value": value, "label": label}
         print(f"[Scanner] Fear & Greed: {value} ({label}) → adj={adj:+.2f}")
         return adj
     except Exception as e:
         print(f"[Scanner] Sentiment fetch failed (using 0): {e}")
         return 0.0
+
+
+def get_sentiment_info() -> dict:
+    """Return the latest cached sentiment data for the dashboard."""
+    return {
+        "fear_greed": _sentiment_cache.get("value"),
+        "label":      _sentiment_cache.get("label", "Unknown"),
+        "adj":        _sentiment_cache.get("adj", 0.0),
+    }
 
 
 # ── Technical indicators ───────────────────────────────────────────────────────

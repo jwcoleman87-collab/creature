@@ -103,6 +103,30 @@ def get_open_symbols() -> list:
     return list(_open_positions.keys())
 
 
+def get_open_position_summary() -> dict | None:
+    """Return a dashboard-friendly summary of the first open position, or None."""
+    if not _open_positions:
+        return None
+    sym, pos = next(iter(_open_positions.items()))
+    try:
+        entry_ts   = datetime.fromisoformat(pos["timestamp_entry"])
+        hours_held = round((datetime.now(timezone.utc) - entry_ts).total_seconds() / 3600, 1)
+    except Exception:
+        hours_held = 0.0
+    return {
+        "symbol":       sym,
+        "direction":    pos.get("direction", "long"),
+        "entry_price":  pos.get("entry_price"),
+        "stop_price":   pos.get("stop_price"),
+        "target_price": pos.get("target_price"),
+        "shares":       pos.get("shares"),
+        "dollar_risk":  pos.get("dollar_risk"),
+        "setup_type":   pos.get("setup_type"),
+        "hours_held":   hours_held,
+        "breakeven_moved": pos.get("stop_moved_to_be", False),
+    }
+
+
 # ── Entry ──────────────────────────────────────────────────────────────────────
 
 def submit_entry(candidate, sizing: dict) -> dict | None:

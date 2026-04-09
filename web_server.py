@@ -1,0 +1,527 @@
+"""
+web_server.py
+=============
+Lightweight HTTP server that serves the creature dashboard.
+Runs in a background daemon thread — never blocks the main trading loop.
+
+Endpoints:
+  GET /           → HTML dashboard (auto-refreshes every 30s)
+  GET /api/status → JSON snapshot of all creature state
+"""
+
+import os
+import json
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+DASHBOARD_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CREATURE — Live Dashboard</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+  :root {
+    --bg:       #050508;
+    --panel:    #0d0d1a;
+    --border:   #1a1a35;
+    --green:    #00ff88;
+    --red:      #ff3355;
+    --amber:    #ffb800;
+    --blue:     #4488ff;
+    --purple:   #aa55ff;
+    --dim:      #444466;
+    --text:     #ccd6f6;
+    --text-dim: #667799;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Rajdhani', sans-serif;
+    font-size: 15px;
+    min-height: 100vh;
+    padding: 16px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .logo {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    color: var(--green);
+    text-shadow: 0 0 20px rgba(0,255,136,0.4);
+  }
+  .logo span { color: var(--dim); font-size: 13px; letter-spacing: 2px; }
+  .status-pill {
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    animation: pulse 2s infinite;
+  }
+  .pill-hunting  { background: rgba(0,255,136,0.15); color: var(--green); border: 1px solid var(--green); }
+  .pill-wounded  { background: rgba(255,184,0,0.15);  color: var(--amber); border: 1px solid var(--amber); }
+  .pill-lockout  { background: rgba(255,51,85,0.15);  color: var(--red);   border: 1px solid var(--red); }
+  .pill-dead     { background: rgba(255,51,85,0.3);   color: var(--red);   border: 1px solid var(--red); }
+  .pill-starting { background: rgba(68,136,255,0.15); color: var(--blue);  border: 1px solid var(--blue); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  .last-update { color: var(--text-dim); font-size: 12px; font-family: 'Share Tech Mono', monospace; }
+
+  /* ── Grid ── */
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 16px; }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+  .card-label {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .card-value {
+    font-size: 28px;
+    font-weight: 700;
+    font-family: 'Share Tech Mono', monospace;
+    line-height: 1;
+  }
+  .card-sub { font-size: 12px; color: var(--text-dim); margin-top: 6px; font-family: 'Share Tech Mono', monospace; }
+  .green  { color: var(--green); }
+  .red    { color: var(--red); }
+  .amber  { color: var(--amber); }
+  .blue   { color: var(--blue); }
+  .purple { color: var(--purple); }
+  .dim    { color: var(--dim); }
+
+  /* ── Health bar ── */
+  .health-bar-wrap { margin-top: 8px; background: #111122; border-radius: 4px; height: 4px; }
+  .health-bar { height: 4px; border-radius: 4px; transition: width 1s; }
+
+  /* ── The Mind ── */
+  .mind-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow: hidden;
+  }
+  .mind-header {
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+  .mind-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 1.5s infinite; }
+  .mind-log {
+    height: 220px;
+    overflow-y: auto;
+    padding: 12px 18px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 13px;
+    display: flex;
+    flex-direction: column-reverse;
+  }
+  .mind-log::-webkit-scrollbar { width: 4px; }
+  .mind-log::-webkit-scrollbar-track { background: transparent; }
+  .mind-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .thought { padding: 3px 0; border-bottom: 1px solid rgba(26,26,53,0.5); }
+  .thought .t-time { color: var(--dim); margin-right: 10px; }
+  .thought.signal  .t-msg { color: var(--green); }
+  .thought.trade   .t-msg { color: var(--amber); }
+  .thought.warn    .t-msg { color: var(--red); }
+  .thought.error   .t-msg { color: var(--red); }
+  .thought.info    .t-msg { color: var(--text); }
+
+  /* ── Open position ── */
+  .position-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .pos-header {
+    font-size: 11px; letter-spacing: 2px; color: var(--text-dim);
+    text-transform: uppercase; margin-bottom: 12px;
+  }
+  .pos-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+  .pos-item-label { font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+  .pos-item-value { font-size: 18px; font-weight: 700; font-family: 'Share Tech Mono', monospace; }
+  .no-pos { color: var(--dim); font-family: 'Share Tech Mono', monospace; font-size: 14px; }
+
+  /* ── Tables ── */
+  .table-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  .table-header {
+    padding: 10px 18px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    padding: 8px 18px; text-align: left; font-size: 11px;
+    letter-spacing: 1px; color: var(--text-dim); border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+  td { padding: 9px 18px; font-family: 'Share Tech Mono', monospace; font-size: 13px; border-bottom: 1px solid rgba(26,26,53,0.5); }
+  tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 700; letter-spacing: 1px;
+  }
+  .tag-win  { background: rgba(0,255,136,0.15); color: var(--green); }
+  .tag-loss { background: rgba(255,51,85,0.15);  color: var(--red); }
+  .tag-blocked { background: rgba(255,51,85,0.1); color: var(--red); }
+  .tag-boosted { background: rgba(0,255,136,0.1); color: var(--green); }
+  .tag-neutral { background: rgba(68,136,255,0.1); color: var(--blue); }
+
+  /* ── Sentiment gauge ── */
+  .gauge-wrap { text-align: center; padding: 8px 0; }
+  .gauge-value { font-size: 48px; font-weight: 700; font-family: 'Share Tech Mono', monospace; }
+  .gauge-label { font-size: 13px; letter-spacing: 2px; margin-top: 4px; }
+  .gauge-bar-wrap { margin: 10px 0; height: 8px; border-radius: 4px; background: linear-gradient(to right, var(--green), var(--amber), var(--red)); position: relative; }
+  .gauge-marker { position: absolute; top: -4px; width: 16px; height: 16px; border-radius: 50%; background: white; transform: translateX(-50%); transition: left 1s; box-shadow: 0 0 6px rgba(255,255,255,0.5); }
+  .gauge-adj { font-size: 13px; font-family: 'Share Tech Mono', monospace; margin-top: 6px; }
+
+  /* ── Footer ── */
+  .footer { text-align: center; color: var(--dim); font-size: 11px; letter-spacing: 2px; padding: 12px; }
+
+  @media (max-width: 900px) {
+    .grid-4 { grid-template-columns: repeat(2,1fr); }
+    .grid-3 { grid-template-columns: repeat(2,1fr); }
+    .pos-grid { grid-template-columns: repeat(2,1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="logo">🦎 CREATURE <span>/ CRYPTO HUNTER v0.6.0</span></div>
+  </div>
+  <div id="status-pill" class="status-pill pill-starting">STARTING</div>
+  <div class="last-update">Updated: <span id="last-update">—</span></div>
+</div>
+
+<!-- Vitals -->
+<div class="grid-4">
+  <div class="card">
+    <div class="card-label">Account Balance</div>
+    <div class="card-value green" id="balance">$—</div>
+    <div class="card-sub" id="pnl">— / —%</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Health State</div>
+    <div class="card-value" id="health-state">—</div>
+    <div class="health-bar-wrap"><div class="health-bar green" id="health-bar" style="width:100%"></div></div>
+    <div class="card-sub" id="drawdown">Drawdown: —%</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Learning Phase</div>
+    <div class="card-value blue" id="phase">—</div>
+    <div class="card-sub" id="total-trades">— total trades</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Today</div>
+    <div class="card-value" id="today-pnl">$—</div>
+    <div class="card-sub" id="today-trades">— trades today</div>
+  </div>
+</div>
+
+<!-- Brain metrics -->
+<div class="grid-3">
+  <div class="card">
+    <div class="card-label">Win Rate</div>
+    <div class="card-value" id="win-rate">—%</div>
+    <div class="card-sub" id="expectancy">Expectancy: — R</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Confidence Score</div>
+    <div class="card-value purple" id="confidence">—</div>
+    <div class="card-sub">Based on recent performance</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Market Sentiment</div>
+    <div class="gauge-wrap">
+      <div class="gauge-value" id="fg-value">—</div>
+      <div class="gauge-label dim" id="fg-label">—</div>
+      <div class="gauge-bar-wrap"><div class="gauge-marker" id="fg-marker" style="left:50%"></div></div>
+      <div class="gauge-adj" id="fg-adj">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- The Mind -->
+<div class="mind-panel">
+  <div class="mind-header">
+    <div class="mind-dot"></div>
+    THE CREATURE'S MIND — Live Thinking Log
+  </div>
+  <div class="mind-log" id="mind-log">
+    <div class="thought info"><span class="t-time">--:--:--</span><span class="t-msg">Waiting for creature data...</span></div>
+  </div>
+</div>
+
+<!-- Open Position -->
+<div class="position-panel">
+  <div class="pos-header">⚡ Open Position</div>
+  <div id="position-content">
+    <div class="no-pos">No open position — creature is scanning.</div>
+  </div>
+</div>
+
+<!-- Asset Intelligence + Trade Log -->
+<div class="grid-2">
+  <div class="table-panel">
+    <div class="table-header">🧠 Asset Intelligence (Learned)</div>
+    <table>
+      <thead><tr><th>Pair</th><th>Trades</th><th>Win Rate</th><th>Expectancy</th><th>Status</th></tr></thead>
+      <tbody id="asset-table"><tr><td colspan="5" class="dim">No data yet — trades build this.</td></tr></tbody>
+    </table>
+  </div>
+  <div class="table-panel">
+    <div class="table-header">📋 Recent Trades</div>
+    <table>
+      <thead><tr><th>Pair</th><th>Setup</th><th>P&L</th><th>R</th><th>Exit</th></tr></thead>
+      <tbody id="trade-table"><tr><td colspan="5" class="dim">No trades yet.</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="footer">CREATURE / PAPER TRADING / 24-7 / AUTO-REFRESH 30s</div>
+
+<script>
+async function refresh() {
+  try {
+    const res  = await fetch('/api/status');
+    const data = await res.json();
+    render(data);
+  } catch(e) {
+    console.warn('Fetch failed:', e);
+  }
+}
+
+function fmt(n, dec=2) { return n !== null && n !== undefined ? Number(n).toFixed(dec) : '—'; }
+function fmtPct(n) { return n !== null && n !== undefined ? Number(n).toFixed(1)+'%' : '—'; }
+
+function render(d) {
+  // Header
+  const health = d.health?.state || 'STARTING';
+  const pill = document.getElementById('status-pill');
+  const statusMap = {
+    'HEALTHY':'HUNTING','WOUNDED':'WOUNDED','SURVIVAL':'SURVIVAL',
+    'LOCKOUT':'LOCKOUT','DEAD':'DEAD','STARTING':'STARTING'
+  };
+  const classMap = {
+    'HEALTHY':'pill-hunting','WOUNDED':'pill-wounded','SURVIVAL':'pill-wounded',
+    'LOCKOUT':'pill-lockout','DEAD':'pill-dead','STARTING':'pill-starting'
+  };
+  pill.textContent = statusMap[health] || health;
+  pill.className   = 'status-pill ' + (classMap[health] || 'pill-starting');
+  document.getElementById('last-update').textContent =
+    d.last_updated ? new Date(d.last_updated).toLocaleTimeString() : '—';
+
+  // Balance
+  const bal = d.balance || {};
+  document.getElementById('balance').textContent = '$' + fmt(bal.current);
+  const pnl = bal.pnl || 0;
+  const pnlEl = document.getElementById('pnl');
+  pnlEl.textContent = (pnl >= 0 ? '+$' : '-$') + Math.abs(pnl).toFixed(2) + ' / ' + fmt(bal.pnl_pct) + '%';
+  pnlEl.className   = 'card-sub ' + (pnl >= 0 ? 'green' : 'red');
+
+  // Health
+  const hState = d.health?.state || '—';
+  const hEl    = document.getElementById('health-state');
+  hEl.textContent = hState;
+  hEl.className   = 'card-value ' + ({'HEALTHY':'green','WOUNDED':'amber','SURVIVAL':'amber','LOCKOUT':'red','DEAD':'red'}[hState] || 'dim');
+  const dd   = d.health?.drawdown_pct || 0;
+  const barW = Math.max(0, 100 - (dd / 10 * 100));
+  const bar  = document.getElementById('health-bar');
+  bar.style.width = barW + '%';
+  bar.className   = 'health-bar ' + (dd < 3 ? 'green' : dd < 5 ? 'amber' : 'red');
+  document.getElementById('drawdown').textContent = 'Drawdown: ' + fmt(dd) + '%';
+
+  // Learning
+  const lrn = d.learning || {};
+  const phaseEl = document.getElementById('phase');
+  phaseEl.textContent = (lrn.phase || '—').toUpperCase();
+  document.getElementById('total-trades').textContent = (lrn.total_trades || 0) + ' total trades';
+
+  // Today
+  const td = d.today || {};
+  const tpnl = td.pnl || 0;
+  const tEl  = document.getElementById('today-pnl');
+  tEl.textContent = (tpnl >= 0 ? '+$' : '-$') + Math.abs(tpnl).toFixed(2);
+  tEl.className   = 'card-value ' + (tpnl >= 0 ? 'green' : 'red');
+  document.getElementById('today-trades').textContent = (td.trades || 0) + ' trades today';
+
+  // Brain
+  const wr  = (lrn.win_rate || 0) * 100;
+  const wrEl = document.getElementById('win-rate');
+  wrEl.textContent = fmtPct(wr);
+  wrEl.className   = 'card-value ' + (wr >= 50 ? 'green' : wr >= 40 ? 'amber' : 'red');
+  document.getElementById('expectancy').textContent = 'Expectancy: ' + fmt(lrn.expectancy_r) + ' R';
+  const conf = lrn.confidence || 0;
+  const confEl = document.getElementById('confidence');
+  confEl.textContent = fmt(conf, 1) + ' / 10';
+
+  // Sentiment
+  const sent = d.sentiment || {};
+  const fgv  = sent.fear_greed;
+  document.getElementById('fg-value').textContent = fgv !== null && fgv !== undefined ? fgv : '—';
+  const fgLabel = document.getElementById('fg-label');
+  fgLabel.textContent = sent.label || '—';
+  const fgAdj = sent.adj || 0;
+  const adjEl = document.getElementById('fg-adj');
+  adjEl.textContent = (fgAdj >= 0 ? 'Signal boost: +' : 'Signal penalty: ') + fmt(Math.abs(fgAdj), 2);
+  adjEl.className   = 'gauge-adj ' + (fgAdj > 0 ? 'green' : fgAdj < 0 ? 'red' : 'dim');
+  if (fgv !== null && fgv !== undefined) {
+    const pct = (100 - fgv);   // fear=left(green), greed=right(red)
+    document.getElementById('fg-marker').style.left = pct + '%';
+    const fgEl = document.getElementById('fg-value');
+    fgEl.className = 'gauge-value ' + (fgv <= 25 ? 'green' : fgv >= 75 ? 'red' : 'amber');
+  }
+
+  // Mind log
+  const thoughts = (d.thinking || []).slice().reverse();
+  const log = document.getElementById('mind-log');
+  if (thoughts.length > 0) {
+    log.innerHTML = thoughts.map(t =>
+      `<div class="thought ${t.level}">` +
+      `<span class="t-time">${t.time}</span>` +
+      `<span class="t-msg">${t.message}</span></div>`
+    ).join('');
+  }
+
+  // Open position
+  const pos = d.open_position;
+  const posDiv = document.getElementById('position-content');
+  if (pos) {
+    const pnlPos = ((pos.current_price || pos.entry_price) - pos.entry_price) * pos.shares;
+    posDiv.innerHTML = `<div class="pos-grid">
+      <div><div class="pos-item-label">Pair</div><div class="pos-item-value green">${pos.symbol}</div></div>
+      <div><div class="pos-item-label">Entry</div><div class="pos-item-value">$${fmt(pos.entry_price,4)}</div></div>
+      <div><div class="pos-item-label">Stop</div><div class="pos-item-value red">$${fmt(pos.stop_price,4)}</div></div>
+      <div><div class="pos-item-label">Target</div><div class="pos-item-value green">$${fmt(pos.target_price,4)}</div></div>
+      <div><div class="pos-item-label">Shares</div><div class="pos-item-value">${fmt(pos.shares,6)}</div></div>
+    </div>
+    <div class="card-sub" style="margin-top:10px">Setup: ${pos.setup_type || '—'} &nbsp;|&nbsp; Risk: $${fmt(pos.dollar_risk,4)} &nbsp;|&nbsp; Entered: ${pos.timestamp_entry ? new Date(pos.timestamp_entry).toLocaleTimeString() : '—'}</div>`;
+  } else {
+    posDiv.innerHTML = '<div class="no-pos">No open position — creature is scanning.</div>';
+  }
+
+  // Asset scores
+  const assets = d.asset_scores || [];
+  const at = document.getElementById('asset-table');
+  if (assets.length === 0) {
+    at.innerHTML = '<tr><td colspan="5" class="dim">No data yet — trades build this.</td></tr>';
+  } else {
+    at.innerHTML = assets.map(a => {
+      const wr2 = (a.win_rate || 0) * 100;
+      const tag  = a.hard_blocked ? '<span class="tag tag-blocked">BLOCKED</span>'
+                 : wr2 >= 60      ? '<span class="tag tag-boosted">BOOSTED</span>'
+                 : wr2 < 35       ? '<span class="tag tag-loss">PENALISED</span>'
+                 :                  '<span class="tag tag-neutral">LEARNING</span>';
+      return `<tr>
+        <td class="green">${a.symbol}</td>
+        <td>${a.total_trades}</td>
+        <td class="${wr2>=50?'green':wr2>=35?'amber':'red'}">${fmtPct(wr2)}</td>
+        <td class="${(a.expectancy_r||0)>=0?'green':'red'}">${fmt(a.expectancy_r,2)}R</td>
+        <td>${tag}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // Recent trades
+  const trades = (d.recent_trades || []).slice(0, 10);
+  const tt = document.getElementById('trade-table');
+  if (trades.length === 0) {
+    tt.innerHTML = '<tr><td colspan="5" class="dim">No trades yet.</td></tr>';
+  } else {
+    tt.innerHTML = trades.map(t => {
+      const win = (t.actual_pnl || 0) > 0;
+      return `<tr>
+        <td class="green">${t.symbol || 'SPY'}</td>
+        <td class="dim">${(t.setup_type||'—').replace('_',' ')}</td>
+        <td class="${win?'green':'red'}">${win?'+':''}$${fmt(Math.abs(t.actual_pnl||0),4)}</td>
+        <td class="${win?'green':'red'}">${win?'+':''}${fmt(t.actual_pnl_r||0,2)}R</td>
+        <td class="dim">${(t.exit_reason||'—').replace('_',' ')}</td>
+      </tr>`;
+    }).join('');
+  }
+}
+
+// Initial load + auto-refresh every 30 seconds
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>"""
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/api/status":
+            from dashboard_state import get_state
+            body = json.dumps(get_state(), default=str).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path in ("/", "/index.html"):
+            body = DASHBOARD_HTML.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", len(body))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # silence access logs — don't pollute creature's output
+
+
+def start():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    print(f"[Dashboard] Live at port {port}")
+    return server
