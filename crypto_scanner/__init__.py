@@ -319,19 +319,18 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
     mr_signal  = (bb_pos <= 20.0 and rsi <= rsi_os)
 
     # ── Extreme Fear override ──────────────────────────────────────────────────
-    # When F&G < 25 AND price is oversold (RSI < 40, BB < 25), the crowd is
-    # panic-selling into an already oversold market. This IS the contrarian
-    # mean reversion setup — allow it even if regime reads "trending".
-    # A crash + extreme fear + oversold = the creature's hunting ground.
-    fear_thresh = get("crypto.sentiment.extreme_fear_threshold", 25)
-    extreme_fear_override = (
-        sentiment_adj > 0          # sentiment is boosting (i.e. fear detected)
-        and rsi <= 40              # price is oversold
-        and bb_pos <= 25           # price is near/below lower Bollinger Band
-    )
+    # When sentiment is strongly fearful, unlock mean reversion even in a
+    # trending (crashing) market. The crowd is panic-selling — the creature
+    # fades the crowd. Sentiment adj > 1.0 = strong contrarian buy signal.
+    extreme_fear_override = sentiment_adj > 1.0   # F&G well below fear threshold
+
+    print(f"[Scanner] {symbol}: ADX={adx:.1f} RSI={rsi:.1f} BB={bb_pos:.1f} "
+          f"Z={z_score:.2f} vol={vol_ratio:.2f} regime={regime} "
+          f"mom={mom_signal} mr={mr_signal} fear_override={extreme_fear_override}")
 
     if regime == "trending" and extreme_fear_override:
-        signal_ok  = mr_signal or True   # open the gate — let the contrarian trade through
+        # In extreme fear, check mean reversion regardless of ADX trend
+        signal_ok  = mr_signal
         setup_type = "mean_reversion_long"
         regime     = "crisis_bounce"
     elif regime == "trending":
