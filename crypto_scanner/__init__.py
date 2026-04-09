@@ -62,10 +62,13 @@ def get_all_bars(symbols: list, limit: int = 200) -> dict:
         for sym in symbols:
             try:
                 bars = resp[sym]
-                if bars:
+                n    = len(bars) if bars is not None else 0
+                print(f"[Scanner] Fetched {sym}: {n} bars")
+                if bars and n > 0:
                     result[sym] = bars
-            except (KeyError, TypeError):
-                pass
+            except (KeyError, TypeError) as e:
+                print(f"[Scanner] Key error for {sym}: {e}")
+        print(f"[Scanner] Bar fetch complete. {len(result)}/{len(symbols)} symbols have data.")
         return result
     except Exception as e:
         print(f"[Scanner] Bar fetch error: {e}")
@@ -409,7 +412,9 @@ def scan(bars_data: dict = None) -> list:
 
     for symbol in universe:
         bars = bars_data.get(symbol)
-        if not bars or len(bars) < 60:
+        n = len(bars) if bars is not None else 0
+        if not bars or n < 60:
+            print(f"[Scanner] {symbol}: SKIPPED — only {n} bars (need 60)")
             continue
         try:
             c = score_symbol(symbol, bars, sentiment_adj)
