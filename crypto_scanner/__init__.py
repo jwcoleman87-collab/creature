@@ -15,6 +15,7 @@ import os
 import math
 import time
 import requests
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
@@ -54,9 +55,14 @@ class SignalCandidate:
 # ── Data fetching ──────────────────────────────────────────────────────────────
 
 def get_all_bars(symbols: list, limit: int = 200) -> dict:
-    """Fetch 1h bars for all symbols in one batched request."""
+    """Fetch 1h bars for all symbols — uses start date to guarantee enough history."""
     try:
-        req  = CryptoBarsRequest(symbol_or_symbols=symbols, timeframe=TimeFrame.Hour, limit=limit)
+        start = datetime.now(timezone.utc) - timedelta(hours=limit)
+        req  = CryptoBarsRequest(
+            symbol_or_symbols=symbols,
+            timeframe=TimeFrame.Hour,
+            start=start,
+        )
         resp = _client.get_crypto_bars(req)
         result = {}
         for sym in symbols:
@@ -78,7 +84,8 @@ def get_all_bars(symbols: list, limit: int = 200) -> dict:
 def get_latest_bars(symbols: list) -> dict:
     """Fetch the most recent completed 1h bar for each symbol."""
     try:
-        req  = CryptoBarsRequest(symbol_or_symbols=symbols, timeframe=TimeFrame.Hour, limit=2)
+        start = datetime.now(timezone.utc) - timedelta(hours=3)
+        req  = CryptoBarsRequest(symbol_or_symbols=symbols, timeframe=TimeFrame.Hour, start=start)
         resp = _client.get_crypto_bars(req)
         result = {}
         for sym in symbols:
