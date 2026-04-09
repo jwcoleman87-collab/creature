@@ -573,7 +573,6 @@ function render(d) {
       </tr>`;
     }).join('');
   }
-}
 
   // Ticker
   const prices = d.prices || {};
@@ -592,7 +591,6 @@ function render(d) {
         <span class="ticker-${dir} ticker-arrow">${arrow} ${Math.abs(chg).toFixed(2)}%</span>
       </div>`;
     }).join('');
-    // Duplicate for seamless loop
     const el = document.getElementById('ticker-inner');
     el.innerHTML = items + items;
   }
