@@ -24,17 +24,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
 
   :root {
-    --bg:       #c8cdd2;
-    --panel:    #dde1e5;
-    --border:   #b0b8bf;
-    --green:    #00ff88;
-    --red:      #ff3355;
+    --bg:       #6b7280;
+    --panel:    #4b5563;
+    --border:   #374151;
+    --green:    #ff8c00;
+    --red:      #ff4444;
     --amber:    #ffb800;
-    --blue:     #4488ff;
-    --purple:   #aa55ff;
-    --dim:      #555e66;
-    --text:     #1a2028;
-    --text-dim: #4a5560;
+    --blue:     #ff8c00;
+    --purple:   #ffaa33;
+    --dim:      #d1d5db;
+    --text:     #ffffff;
+    --text-dim: #e5e7eb;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
