@@ -318,7 +318,23 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
     mom_signal = z_score >= z_thresh
     mr_signal  = (bb_pos <= 20.0 and rsi <= rsi_os)
 
-    if regime == "trending":
+    # ── Extreme Fear override ──────────────────────────────────────────────────
+    # When F&G < 25 AND price is oversold (RSI < 40, BB < 25), the crowd is
+    # panic-selling into an already oversold market. This IS the contrarian
+    # mean reversion setup — allow it even if regime reads "trending".
+    # A crash + extreme fear + oversold = the creature's hunting ground.
+    fear_thresh = get("crypto.sentiment.extreme_fear_threshold", 25)
+    extreme_fear_override = (
+        sentiment_adj > 0          # sentiment is boosting (i.e. fear detected)
+        and rsi <= 40              # price is oversold
+        and bb_pos <= 25           # price is near/below lower Bollinger Band
+    )
+
+    if regime == "trending" and extreme_fear_override:
+        signal_ok  = mr_signal or True   # open the gate — let the contrarian trade through
+        setup_type = "mean_reversion_long"
+        regime     = "crisis_bounce"
+    elif regime == "trending":
         signal_ok  = mom_signal
         setup_type = "momentum_long"
     elif regime == "ranging":
@@ -348,7 +364,10 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
 
     # ── Final score ────────────────────────────────────────────────────────────
     final = raw_tech + sentiment_adj + affinity
-    if final < get("risk.crypto.min_score_to_backtest", 3.0):
+    # In crisis_bounce regime (extreme fear override), waive the score threshold —
+    # the backtest gate is the real judge. Don't block a contrarian setup on score alone.
+    min_score = 0.0 if regime == "crisis_bounce" else get("risk.crypto.min_score_to_backtest", 3.0)
+    if final < min_score:
         return None
 
     # ── Stop / target ──────────────────────────────────────────────────────────
