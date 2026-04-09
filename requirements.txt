@@ -1,0 +1,8 @@
+# Creature — SPY Trading Organism
+# Phase 0 dependencies
+
+alpaca-py==0.38.0          # Alpaca trading API client
+python-dotenv==1.0.1       # Load .env file for API keys
+pandas==2.2.3              # Data manipulation
+pyyaml>=6.0                # Load constitution.yaml
+requests>=2.30.0           # HTTP client (sentiment fetch, explicit dep)

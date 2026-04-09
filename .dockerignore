@@ -1,0 +1,12 @@
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+*.db
+venv/
+.venv/
+.vscode/
+.idea/
+journal_data/
+*.bat

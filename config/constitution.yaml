@@ -1,0 +1,477 @@
+# ============================================================
+# CREATURE CONSTITUTION — THE SUPREME LAW
+# Version 0.6.0 — Mispricing Hunter, Sentiment-Aware
+# Nothing in the codebase overrides these values.
+# To change behaviour, change it here first.
+# ============================================================
+
+creature:
+  name: "Creature"
+  version: "0.6.0"
+  mode: "paper"                # NEVER change to 'live' without a full review
+
+  # Decision cycle — the creature's brain (v2.0)
+  decision_cycle:
+    name: "Sense → Assess → Sniff → Learn → Test → Learn → Action"
+    description: >
+      v2.0 — The creature is now a MISPRICING HUNTER.
+      Every scan cycle passes through seven phases:
+        1. SENSE  — read crowd sentiment (Fear & Greed Index)
+        2. ASSESS — determine market regime (calm/trending/volatile/euphoria/crisis)
+        3. SNIFF  — check funding rates for leverage imbalances
+        4. LEARN  — scan all pairs with sentiment + funding + brain adjustments
+        5. TEST   — backtest the best signal against recent history
+        6. LEARN  — absorb what the backtest revealed
+        7. ACTION — trade if evidence supports it, PASS if it doesn't.
+      Passing is not failure. Passing is intelligence.
+      The creature fades crowd sentiment, not follows it.
+
+market:
+  symbol: "SPY"                # Primary instrument for ORB strategy
+  session: "intraday"          # No overnight holds for SPY. Ever.
+  timezone: "America/New_York"
+
+  # Market hours (Eastern Time)
+  market_open:  "09:30"
+  market_close: "16:00"
+
+  # Banned windows — no new entries during these times
+  banned_windows:
+    - { start: "09:30", end: "09:45", reason: "Opening volatility — range still forming" }
+    - { start: "15:45", end: "16:00", reason: "Closing chaos — liquidity drops sharply" }
+
+  # Force-close all positions before this time — no exceptions
+  eod_close_by: "15:45"
+
+  # Trading halt behaviour (gap/circuit-breaker defense)
+  halt_behaviour: >
+    If a position is held through a trading halt, close immediately on re-open
+    regardless of P&L. Do not wait for the next signal. Log as "halt_exit".
+
+risk:
+  # ── Per-trade risk (as % of CURRENT account value) ────────
+  risk_per_trade_min: 0.0025   # 0.25% — $1.25 at $500 | $2.50 at $1,000
+  risk_per_trade_max: 0.005    # 0.50% — $2.50 at $500 | $5.00 at $1,000
+  default_risk_per_trade: 0.0025
+
+  # ── Daily loss limit ──────────────────────────────────────
+  daily_stop_pct: 0.01         # 1.0% of current balance — ~$5.00 at $500
+  daily_stop_resets_at: "09:30" # Daily loss counter clears at market open each day
+
+  # ── Consecutive losing day rule ───────────────────────────
+  # If Creature hits the daily stop N days in a row, it pauses and flags
+  # the owner for review. This signals a regime mismatch, not just bad luck.
+  max_consecutive_losing_days: 3
+  consecutive_loss_action: "pause_and_alert"
+  # Owner must manually re-enable trading after reviewing the journal.
+
+  # ── Health thresholds (drawdown from peak equity) ─────────
+  healthy_threshold:   0.00    # 0%    — full operation
+  wounded_threshold:   0.03    # 3%    — ~$15 at $500 — reduce size, heightened caution
+  survival_threshold:  0.05    # 5%    — ~$25 at $500 — minimum size only
+  lockout_threshold:   0.075   # 7.5%  — ~$37.50 at $500 — no new trades, review only
+  death_threshold:     0.10    # 10%   — ~$50 at $500 — organism dies, full stop
+
+  # ── Health state exit conditions ─────────────────────────
+  # Creature does NOT auto-recover to a better health state just by
+  # bouncing off a threshold. It must earn its way back with a new equity high.
+  health_exit_rules:
+    wounded_exits_when:  "account reaches a NEW equity high above the level that triggered wounded"
+    survival_exits_when: "account recovers to within 2% of the equity high (enters wounded state)"
+    lockout_exits_when:  "owner manually reviews journal and re-enables trading"
+    # This is conservative by design. Creature stays cautious until it has truly recovered.
+
+  # ── Minimum tradeable balance ─────────────────────────────
+  minimum_tradeable_balance: 400.00
+  # If account drops below $400 in paper mode, halt entirely and flag for review.
+  # At this point position sizes are so small that trading costs outweigh any edge.
+
+  # ── Starting paper account balance ────────────────────────
+  starting_balance: 500.00     # $500 — fractional SPY shares via Alpaca paper account
+
+  # ── Fixed Fractional Position Sizing ─────────────────────
+  # Creature always risks a % of its CURRENT balance, not the starting balance.
+  #   - Winning streaks → dollar risk grows (compounding up)
+  #   - Losing streaks  → dollar risk shrinks (self-protecting)
+  #
+  # Formula:
+  #   dollar_risk    = current_balance × risk_per_trade_pct
+  #   position_size  = dollar_risk / (entry_price − stop_loss_price)
+  #
+  # At $500, 0.25% risk, $2.00 stop distance:
+  #   dollar_risk   = $500 × 0.0025 = $1.25
+  #   position_size = $1.25 / $2.00 = 0.625 shares (fractional, Alpaca OK)
+  #
+  position_sizing_method: "fixed_fractional"
+  sizing_base: "current_balance"   # NEVER use starting_balance for sizing
+
+  # ── Maximum position value cap (gap/halt defense) ─────────
+  # Regardless of stop distance, Creature never holds more than this
+  # percentage of the account in a single position at any time.
+  # This protects against trading halts and flash gaps where stop orders
+  # cannot fill at the intended price.
+  max_position_value_pct: 0.05   # 5% of current balance = $25 at $500
+  # Example: if the formula says buy 2.0 shares at $560 = $1,120, but
+  # 5% of $500 = $25 max notional, the position is capped at 0.044 shares.
+  # This is a hard ceiling. The risk formula cannot override it.
+
+  # ── Crypto-specific risk rules ───────────────────────────
+  crypto:
+    stop_loss_pct: 0.01          # 1% stop from entry (floor)
+    stop_loss_atr_multiplier: 1.5  # Preferred: ATR × 1.5 (widens in volatile markets)
+    take_profit_pct: 0.02        # 2% target (2:1 R/R)
+    max_spread_pct: 0.50         # Skip any pair with spread > 0.5%
+    min_score_to_backtest: 3.0   # Scanner score threshold to proceed to TEST
+    scan_interval_seconds: 300   # Scan every 5 minutes
+    exit_check_seconds: 30       # Check exits every 30 seconds
+    max_hold_hours: 8            # Time-based exit — crypto has no EOD
+    max_concurrent_positions: 1  # One position at a time on $500 account
+
+  # ── Slippage defense ─────────────────────────────────────
+  # In fast or volatile markets, stop orders may fill far below intended price.
+  # If actual fill price deviates from intended stop by more than this amount,
+  # log as a "slippage_breach" event and count the excess loss toward daily stop.
+  max_acceptable_slippage_per_share: 0.15  # $0.15 per share
+  # At 0.625 shares, max acceptable extra slippage = $0.09 per trade
+  # Any more than this is logged as an anomaly for journal review.
+
+strategy:
+  # ── Opening Range Breakout (ORB) ──────────────────────────
+  name: "Opening Range Breakout"
+  abbreviation: "ORB"
+  instrument: "SPY"
+
+  # Opening range window
+  opening_range_start: "09:30"
+  opening_range_end:   "10:00"   # First 30 minutes defines the range
+
+  # Entry signals
+  signal_long:  "price closes ABOVE opening range high on a 5-minute candle"
+  signal_short: "price closes BELOW opening range low on a 5-minute candle"
+
+  # Volume confirmation — breakout must have conviction
+  volume_confirmation_required: true
+  volume_candle_size_minutes: 5         # Use 5-minute candles for volume measurement
+  volume_lookback_candles: 20           # Compare breakout bar to average of prior 20 bars
+  volume_condition: "breakout candle volume > average of prior 20 five-minute candles"
+  # Thin volume = fake-out. Skip the trade and log the skip.
+
+  # Entry discipline
+  entry_rule: "Enter on the CLOSE of the confirmed breakout candle. No anticipation. No chasing."
+  max_trades_per_day: 2         # One long slot + one short slot per day. No more.
+  trade_slot_rule: >
+    Each directional slot (long / short) can only be used ONCE per day.
+    A stop-out does not re-open the slot. If the long slot is used and stopped out,
+    Creature may not take another long that day — only the short slot remains.
+
+  # Direction filter — align with the bigger trend
+  direction_filter:
+    long_condition:  "SPY closes above its 20-day simple moving average"
+    short_condition: "SPY closes below its 20-day simple moving average"
+    # Trend alignment is assessed on daily close, not intraday price.
+
+  # Shorting rules
+  shorting:
+    allowed: true
+    method: "direct_short_via_alpaca"   # Alpaca paper account supports shorting
+    note: >
+      Paper account must have margin enabled to short. On live account,
+      review margin requirements before enabling. Alternative: use SH (inverse SPY ETF)
+      to avoid margin entirely. Decision must be made before going live.
+
+  # ── Exit rules (CRITICAL — defines when Creature takes profit or cuts loss) ──
+  exit_rules:
+    stop_loss: >
+      Hard stop placed at the opposite side of the opening range.
+      Long trade: stop = opening range LOW.
+      Short trade: stop = opening range HIGH.
+      This gives each trade natural structure-based protection.
+
+    profit_target: >
+      Primary target = 2× the distance from entry to stop loss (2:1 reward/risk ratio).
+      Example: entry at $561, stop at $559 (distance = $2.00), target = $561 + $4.00 = $565.
+      This means every winner earns twice what a loser costs.
+      At a 40% win rate with 2:1 R/R, Creature is still profitable.
+
+    trailing_stop_rule: >
+      Once trade reaches 1R profit (halfway to target), move stop to breakeven.
+      This locks in a worst-case of zero loss on any trade that gets moving.
+      Creature never gives back a trade that reached +1R.
+
+    eod_exit: >
+      All open positions are closed at 15:45 ET regardless of P&L.
+      No exceptions. No overnight holds.
+
+    reward_risk_ratio: 2.0      # Target is always 2× the risk taken
+    breakeven_trigger_r: 1.0    # Move stop to breakeven when trade reaches +1R
+
+    # ── The Nose: Food Turning Sour ────────────────────────────
+    # Positions are food. The creature doesn't wait for a stop loss
+    # to tell it something is wrong. It SMELLS the food turning.
+    #
+    # Every 30 seconds while holding a position, the creature sniffs
+    # for six symptoms of decay:
+    #   1. Momentum reversal — price moving against us
+    #   2. Volume dying — conviction disappearing
+    #   3. Spread widening — liquidity vanishing (market makers leaving)
+    #   4. Price stalling — the food isn't growing, it's rotting
+    #   5. Candle rejection — wicks showing sellers/buyers pushing back
+    #   6. Held too long — crypto moves fast, old food is bad food
+    #
+    # Each symptom adds to a sourness score (0-100).
+    # At 60+ sourness: the creature drops the position. No hesitation.
+    # At 80+ sourness: emergency exit. The food is rotten.
+    #
+    # A small loss from dropping sour food beats a big loss from
+    # stubbornly holding until the stop hits. Instinct > rules.
+    sour_detection:
+      enabled: false               # DISABLED until creature has 50+ trades
+      enable_after_trades: 50      # Auto-enable once brain has enough experience
+      threshold: 60                # Drop the food at this sourness level
+      emergency_threshold: 80      # Emergency drop — don't even think
+      check_interval_seconds: 30   # How often to sniff
+      rationale: >
+        The creature is a newborn. It hasn't earned the right to override
+        the stop loss with instinct. Stop loss is simple and reliable.
+        Once the creature has 50+ trades and the brain has real data,
+        the nose activates. Instinct must be earned, not assumed.
+
+crypto:
+  # ── 24/7 Crypto Universe ────────────────────────────────
+  session: "24/7"
+  universe:
+    - "BTC/USD"
+    - "ETH/USD"
+    - "SOL/USD"
+    - "LINK/USD"
+    - "DOT/USD"
+    - "XRP/USD"
+    - "DOGE/USD"
+    - "AVAX/USD"
+    - "ADA/USD"
+    - "UNI/USD"
+    - "LTC/USD"
+    - "BCH/USD"
+    - "AAVE/USD"
+
+  strategy:
+    name: "Mispricing Hunter v2.0 (Sense→Assess→Sniff→Learn→Test→Learn→Action)"
+    description: >
+      v2.0 — The creature hunts MISPRICING, not just momentum.
+      Three-layer scoring: Technical (momentum, z-score, volume) +
+      Sentiment (Fear & Greed contrarian signals) + Funding (leverage
+      imbalance detection). The creature fades crowd emotion and
+      exploits the mispricings that emotional trading creates.
+      Research basis: Han et al. (2022), Guidolin & Ricci (2018),
+      hedge fund β^SIO paper (2025).
+
+    sub_strategies:
+      momentum:
+        z_score_lookback_bars: 42        # 7 days of 4h periods on 1h bars
+        z_score_entry_threshold: 1.5     # Z > 1.5 = strong momentum long
+        adx_trending_threshold: 25       # ADX above this = trending regime
+      mean_reversion:
+        rsi_period: 14
+        rsi_oversold: 35                 # RSI below this = oversold long signal
+        rsi_overbought: 65
+        bb_period: 20
+        bb_std: 2.0
+        adx_ranging_threshold: 20        # ADX below this = ranging regime
+      volume:
+        lookback_bars: 20
+        min_vol_ratio: 1.2               # Current bar volume must exceed 120% of 20-bar avg
+
+  # ── Sentiment System (NEW v0.6.0) ──────────────────────
+  sentiment:
+    source: "alternative.me Fear & Greed Index"
+    cache_ttl_seconds: 3600
+    behaviour: >
+      The creature is a CONTRARIAN. When the crowd is fearful,
+      it looks for buying opportunities. When the crowd is greedy,
+      it looks for shorts or passes. Research shows: speculators
+      who ride sentiment LOSE. Arbitrageurs who fade it WIN.
+    extreme_fear_threshold: 25     # Below this → strong contrarian buy signal
+    extreme_greed_threshold: 75    # Above this → strong contrarian sell signal
+    max_score_adjustment: 5.0      # Maximum points sentiment can add/remove
+
+  # ── Regime Detection (NEW v0.6.0) ──────────────────────
+  regime:
+    assessment_interval_seconds: 900   # Re-assess every 15 minutes
+    regimes:
+      calm:      { description: "Low vol, normal volume. Full trading.", size_modifier: 1.0 }
+      trending:  { description: "Clear direction with conviction.", size_modifier: 1.0 }
+      volatile:  { description: "High vol, choppy. Reduce size.", size_modifier: 0.5 }
+      euphoria:  { description: "Extreme greed + rising. Longs blocked.", size_modifier: 0.5, direction: "short_only" }
+      crisis:    { description: "Extreme fear + crash. Shorts blocked.", size_modifier: 0.5, direction: "long_only" }
+    hard_rule: >
+      During EUPHORIA: no new long positions. The crowd is buying —
+      we don't join them. We either short or wait.
+      During CRISIS: no new short positions. The crowd is selling —
+      we don't pile on. We either buy or wait.
+      These rules protect against the "limits to arbitrage" effect
+      documented in Guidolin & Ricci (2018).
+
+  # ── Funding Rate Monitoring (NEW v0.6.0) ────────────────
+  funding:
+    source: "CoinGlass public API"
+    cache_ttl_seconds: 1800
+    behaviour: >
+      Extreme funding rates signal leverage imbalances.
+      Positive funding (longs pay shorts) = overleveraged long → contrarian SHORT.
+      Negative funding (shorts pay longs) = overleveraged short → contrarian LONG.
+      The creature uses this as a mispricing signal, not a trade type.
+      It can't do basis trades on Alpaca, but it can TIME its trades
+      using funding rate data to catch squeezes.
+    thresholds:
+      normal:   { range: [-0.01, 0.01], description: "No signal" }
+      elevated: { range: [-0.03, 0.03], description: "Mild directional" }
+      extreme:  { threshold: 0.05, description: "Strong mispricing signal" }
+      crazy:    { threshold: 0.10, description: "Squeeze imminent" }
+
+  # Backtesting thresholds — the creature must prove the pattern works
+  backtest:
+    min_win_rate: 0.45
+    min_expectancy_r: 0.30
+    min_sample_size: 5
+    lookback_days: 7
+
+setups:
+  # Exactly two setups. No more. No less.
+  allowed:
+    - "trend_continuation"
+    - "failed_breakout"
+
+  # Gates every setup must pass before a trade is allowed
+  gates:
+    - "regime_match"           # Does the current regime suit this setup?
+    - "setup_validity"         # Does the pattern actually exist right now?
+    - "execution_viability"    # Can we get filled at acceptable prices?
+
+costs:
+  commission_per_share: 0.0    # Alpaca is commission-free
+  slippage_per_share:   0.02   # $0.02 assumed slippage each way (normal conditions)
+  min_spread_allowed:   0.05   # Skip trade if spread > $0.05
+
+journal:
+  log_skipped_trades: true
+  log_reason_required: true
+  # Every trade entry must include: entry_price, stop_price, target_price,
+  # position_size, dollar_risk, health_state, learning_phase, setup_type,
+  # volume_confirmed (true/false), direction_filter_passed (true/false)
+  required_fields:
+    - entry_price
+    - stop_price
+    - target_price
+    - exit_price
+    - position_size
+    - dollar_risk
+    - actual_pnl
+    - health_state_at_entry
+    - learning_phase_at_entry
+    - setup_type
+    - volume_confirmed
+    - direction_filter_passed
+    - exit_reason           # "target_hit" | "stop_hit" | "breakeven_stop" | "eod_close" | "halt_exit" | "daily_stop"
+    - slippage_breach       # true/false
+
+learning:
+  # ── Adaptive Spiral Growth System ────────────────────────
+  # Creature earns the right to be bolder as it proves itself.
+  # The spiral accelerates as confidence is earned.
+  # The constitution remains the hard ceiling — always.
+
+  confidence_score:
+    source: "rolling win rate + expectancy over last 20 trades"
+    drives: "phase transitions and parameter tightening"
+    minimum_trades_to_score: 10   # Need at least 10 trades before score is meaningful
+
+  phases:
+    newborn:
+      trade_range: "0–20"
+      risk_per_trade: 0.0025         # Minimum only (0.25%)
+      signal_confirmation: "wide"    # Requires stronger signals before entry
+      reaction_speed: "slow"
+      description: >
+        Creature is born cautious. Minimum position sizes, strong signal confirmation
+        required, no exceptions to rules tolerated. It is learning, not earning.
+
+    developing:
+      trade_range: "21–100"
+      unlock_condition: "win_rate > 0.45 AND expectancy > 0 over last 20 trades"
+      risk_per_trade: "scales linearly from 0.0025 toward 0.005 as confidence grows"
+      signal_confirmation: "tightening"
+      reaction_speed: "moderate"
+      description: >
+        If Creature's track record justifies it, position sizing edges upward
+        proportional to confidence score. Trust is earned, not assumed.
+        If confidence score drops below threshold, risk scales back down immediately.
+
+    mature:
+      trade_range: "100+"
+      unlock_condition: "win_rate > 0.50 AND expectancy > 0.5R over last 20 trades"
+      risk_per_trade: 0.005          # Maximum (0.50%) — only if confidence warrants
+      signal_confirmation: "tuned"
+      reaction_speed: "fast"
+      description: >
+        Parameters shaped by own trade history. Operates at upper bounds of
+        what the constitution allows. Still bound by every hard rule.
+
+  reset_rule: >
+    If Creature hits the death_threshold, ALL learning resets to Newborn.
+    Confidence score resets to zero. Risk returns to minimum (0.25%).
+    Trade counter resets to 0. Creature must re-earn every phase from scratch.
+
+  # ── Adaptive Brain ──────────────────────────────────────
+  # The brain makes the creature genuinely smarter over time.
+  # Not just bolder — SMARTER. It learns:
+  brain:
+    description: >
+      The brain remembers everything and uses it to sharpen every decision.
+      It does NOT override the constitution. It operates within the hard limits.
+      But within those limits, it gets faster, pickier, and more profitable.
+
+    coin_affinity:
+      description: "Tracks win rate and expectancy per coin. Boosts coins we're good at, avoids coins we're bad at."
+      min_trades_for_opinion: 3
+      boost_if_wr_above: 0.60
+      penalise_if_wr_below: 0.35
+      hard_block_if_wr_below: 0.25   # After 5+ trades — just stop trading this coin
+
+    time_of_day:
+      description: "Tracks outcomes by hour. Learns that 3am signals are garbage."
+      min_trades_for_opinion: 3
+      boost_if_wr_above: 0.60
+      hard_block_if_wr_below: 0.20
+
+    pattern_memory:
+      description: "Tracks which signal types work — momentum, mean reversion, volume breakout."
+      types: ["momentum_long", "momentum_short", "mean_reversion", "volume_breakout"]
+      min_trades_for_opinion: 3
+
+    sceptic_layer:
+      description: >
+        The creature's built-in devil's advocate. Before every trade, it looks
+        for reasons NOT to trade. Exhaustion traps, volume fakeouts, overextension.
+        The sceptic has veto power over any signal. A smart pass is worth more
+        than a dumb trade.
+
+    adaptive_tempo:
+      description: >
+        As the creature proves itself, it scans faster and accepts slightly
+        weaker signals. If it's losing, it slows down and gets stricter.
+      scan_interval_range: [60, 600]      # Never faster than 60s, never slower than 600s
+      score_threshold_range: [1.0, 6.0]   # Never lower than 1.0, never higher than 6.0
+      confidence_drives_speed: true
+
+  hard_ceiling: >
+    Constitution risk limits are IMMUTABLE regardless of learning phase or
+    confidence score. The spiral speeds up reactions — it never grants permission
+    to break the rules.
+
+offspring:
+  # Parent must earn the right to spawn children
+  min_trades_before_spawn:      50
+  min_profit_pct_before_spawn:  0.06    # +6% realised gain
+  max_drawdown_to_spawn:        0.03    # Must be under 3% drawdown to spawn
+  max_paper_children:           2
+  mutations_per_child:          1       # One variable changed per child — no more

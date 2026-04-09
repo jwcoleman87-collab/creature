@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+
+[deploy]
+# Always-on worker — runs until you hit STOP in the Railway dashboard
+# No cron schedule: crypto trades 24/7
+region = "us-east4"              # Virginia — lowest latency to Alpaca
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5

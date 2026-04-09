@@ -1,0 +1,21 @@
+# API keys and secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# Database
+*.db
+journal_data/
+
+# IDE
+.vscode/
+.idea/
+
+# Deployment artifacts
+*.log
