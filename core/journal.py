@@ -113,6 +113,37 @@ def init_db():
         )
     """)
 
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS cycle_events (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc    TEXT NOT NULL,
+            phase            TEXT,
+            status           TEXT NOT NULL,  -- ok | warning | error | safe_mode
+            action           TEXT NOT NULL,
+            reason           TEXT,
+            health_state     TEXT,
+            learning_phase   TEXT,
+            current_balance  REAL,
+            open_positions   INTEGER,
+            candidates_count INTEGER,
+            best_symbol      TEXT,
+            error_type       TEXT,
+            error_message    TEXT,
+            details_json     TEXT
+        )
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS system_events (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp_utc  TEXT NOT NULL,
+            level          TEXT NOT NULL,  -- info | warn | error | critical
+            code           TEXT NOT NULL,
+            message        TEXT NOT NULL,
+            details_json   TEXT
+        )
+    """)
+
     # Add symbol column to trades if it doesn't exist yet (safe migration)
     try:
         c.execute("ALTER TABLE trades ADD COLUMN symbol TEXT DEFAULT 'SPY'")
@@ -317,3 +348,58 @@ def get_daily_stats(n_days: int = 20) -> dict:
         "expectancy_r": round(expectancy, 4),
         "total_trades": len(trades),
     }
+
+
+def log_cycle_event(event: dict):
+    """
+    Persist a single runtime cycle heartbeat.
+    This is intentionally lightweight and called every loop iteration.
+    """
+    conn = _get_connection()
+    conn.execute("""
+        INSERT INTO cycle_events (
+            timestamp_utc, phase, status, action, reason,
+            health_state, learning_phase, current_balance,
+            open_positions, candidates_count, best_symbol,
+            error_type, error_message, details_json
+        ) VALUES (
+            :timestamp_utc, :phase, :status, :action, :reason,
+            :health_state, :learning_phase, :current_balance,
+            :open_positions, :candidates_count, :best_symbol,
+            :error_type, :error_message, :details_json
+        )
+    """, {
+        "timestamp_utc":    event.get("timestamp_utc", datetime.utcnow().isoformat()),
+        "phase":            event.get("phase"),
+        "status":           event.get("status", "ok"),
+        "action":           event.get("action", "idle"),
+        "reason":           event.get("reason"),
+        "health_state":     event.get("health_state"),
+        "learning_phase":   event.get("learning_phase"),
+        "current_balance":  event.get("current_balance"),
+        "open_positions":   event.get("open_positions"),
+        "candidates_count": event.get("candidates_count"),
+        "best_symbol":      event.get("best_symbol"),
+        "error_type":       event.get("error_type"),
+        "error_message":    event.get("error_message"),
+        "details_json":     json.dumps(event.get("details", {})),
+    })
+    conn.commit()
+    conn.close()
+
+
+def log_system_event(level: str, code: str, message: str, details: dict | None = None):
+    """Persist structured system-level events such as reconcile failures and exceptions."""
+    conn = _get_connection()
+    conn.execute("""
+        INSERT INTO system_events (timestamp_utc, level, code, message, details_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        datetime.utcnow().isoformat(),
+        level,
+        code,
+        message,
+        json.dumps(details or {}),
+    ))
+    conn.commit()
+    conn.close()

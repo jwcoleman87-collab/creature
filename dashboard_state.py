@@ -5,18 +5,67 @@ Shared in-memory state between crypto_main.py and the web dashboard.
 Thread-safe. crypto_main writes here; web_server reads from here.
 """
 
+import os
+import json
 import threading
+import socket
+import uuid
 from datetime import datetime, timezone
+from core.constitution import get
+
+STARTING_BALANCE = float(get("risk.starting_balance", 500.0))
+UPDATES_DIR = os.path.join(os.path.dirname(__file__), "updates")
+REVISION_FILE = os.path.join(UPDATES_DIR, "current_revision.json")
+
+
+def _load_revision_meta() -> dict:
+    default = {
+        "id": "dev-local",
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "title": "Local Development",
+        "notes_file": "updates/README.md",
+    }
+    try:
+        if not os.path.exists(REVISION_FILE):
+            return default
+        with open(REVISION_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return default
+        return {
+            "id": data.get("id", default["id"]),
+            "date": data.get("date", default["date"]),
+            "title": data.get("title", default["title"]),
+            "notes_file": data.get("notes_file", default["notes_file"]),
+        }
+    except Exception:
+        return default
+
+
+REVISION_META = _load_revision_meta()
+INSTANCE_ID = os.environ.get("CREATURE_INSTANCE_ID", f"local-{uuid.uuid4().hex[:8]}")
+RUNTIME_SOURCE = os.environ.get("CREATURE_RUNTIME_SOURCE", "local")
 
 _lock  = threading.Lock()
 _state = {
     "status":         "STARTING",
+    "revision":       REVISION_META,
     "uptime_start":   datetime.now(timezone.utc).isoformat(),
     "last_updated":   None,
+    "runtime": {
+        "instance_id": INSTANCE_ID,
+        "source": RUNTIME_SOURCE,
+        "hostname": socket.gethostname(),
+        "pid": os.getpid(),
+        "cycle_count": 0,
+        "last_cycle_phase": "startup",
+        "last_cycle_status": "starting",
+        "last_cycle_at": None,
+    },
     "balance": {
-        "current":  500.0,
-        "peak":     500.0,
-        "starting": 500.0,
+        "current":  STARTING_BALANCE,
+        "peak":     STARTING_BALANCE,
+        "starting": STARTING_BALANCE,
         "pnl":      0.0,
         "pnl_pct":  0.0,
     },
@@ -65,7 +114,7 @@ def think(message: str, level: str = "info"):
     """Add a line to the creature's thinking log."""
     with _lock:
         entry = {
-            "time":    datetime.now(timezone.utc).strftime("%H:%M:%S"),
+            "time":    datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
             "message": message,
             "level":   level,   # info | signal | trade | warn | error
         }
@@ -76,14 +125,29 @@ def think(message: str, level: str = "info"):
 def get_state() -> dict:
     with _lock:
         import copy
-        return copy.deepcopy(_state)
+        snapshot = copy.deepcopy(_state)
+        snapshot["runtime"]["pid"] = os.getpid()
+        return snapshot
+
+
+def mark_heartbeat(phase: str, status: str = "ok"):
+    """Mark each runtime cycle so UI can detect freshness."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    with _lock:
+        runtime = _state.get("runtime", {})
+        runtime["cycle_count"] = int(runtime.get("cycle_count", 0)) + 1
+        runtime["last_cycle_phase"] = phase
+        runtime["last_cycle_status"] = status
+        runtime["last_cycle_at"] = now_iso
+        _state["runtime"] = runtime
+        _state["last_updated"] = now_iso
 
 
 def sync_from_organism(organism):
     """Pull latest organism state into dashboard."""
     s = organism.state
     h = organism.health.summary()
-    starting = 500.0
+    starting = STARTING_BALANCE
 
     with _lock:
         _state["balance"] = {

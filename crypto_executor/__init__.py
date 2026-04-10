@@ -10,6 +10,7 @@ Exit conditions: stop hit, target hit, 8h time-based exit, breakeven trail.
 
 import os
 import json
+from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
@@ -31,6 +32,7 @@ _POSITIONS_FILE = os.path.join(
 )
 
 _open_positions: dict = {}   # { "BTC/USD": position_dict }
+_MIN_ORDER_QTY = Decimal("0.000001")
 
 
 # ── Symbol normalisation ───────────────────────────────────────────────────────
@@ -45,6 +47,18 @@ def _normalise(sym: str) -> str:
             base = sym[: -len(quote)]
             return f"{base}/{quote}"
     return sym   # Return as-is if we can't determine the format
+
+
+def _to_order_qty(raw_qty) -> Decimal:
+    """
+    Convert raw qty to a precision-safe order qty.
+    Rounds DOWN to 6 decimals so we never request more than available.
+    """
+    try:
+        q = Decimal(str(raw_qty)).copy_abs()
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
+    return q.quantize(_MIN_ORDER_QTY, rounding=ROUND_DOWN)
 
 
 # ── Persistence ────────────────────────────────────────────────────────────────
@@ -69,20 +83,115 @@ def reconcile_with_alpaca():
     On startup, cross-check our tracked positions with Alpaca's live state.
     Removes stale entries where Alpaca no longer holds the position.
     """
+    report = {
+        "ok": True,
+        "tracked_symbols": [],
+        "live_symbols": [],
+        "stale_tracked_symbols": [],
+        "orphan_live_symbols": [],
+        "error": None,
+    }
     _load()
     try:
-        live         = _trading_client.get_all_positions()
-        live_symbols = {_normalise(p.symbol) for p in live}
+        tracked_symbols = set(_open_positions.keys())
+        live = _trading_client.get_all_positions()
 
-        stale = [s for s in list(_open_positions.keys()) if s not in live_symbols]
+        live_symbols = set()
+        dust_symbols = []
+        for p in live:
+            sym = _normalise(p.symbol)
+            qty = _to_order_qty(getattr(p, "qty", 0))
+            if qty < _MIN_ORDER_QTY:
+                dust_symbols.append(sym)
+                continue
+            live_symbols.add(sym)
+        report["tracked_symbols"] = sorted(tracked_symbols)
+        report["live_symbols"] = sorted(live_symbols)
+
+        stale = [s for s in list(tracked_symbols) if s not in live_symbols]
         for s in stale:
             print(f"[Executor] Reconcile: removing stale position {s}")
             del _open_positions[s]
+        report["stale_tracked_symbols"] = sorted(stale)
+        report["orphan_live_symbols"] = sorted(live_symbols - tracked_symbols)
+        report["dust_live_symbols"] = sorted(set(dust_symbols))
 
         _save()
-        print(f"[Executor] Reconciled. Tracking {len(_open_positions)} open position(s).")
+        print(
+            f"[Executor] Reconciled. Tracking {len(_open_positions)} open position(s). "
+            f"Orphans={len(report['orphan_live_symbols'])} Dust={len(report['dust_live_symbols'])}"
+        )
     except Exception as e:
+        report["ok"] = False
+        report["error"] = str(e)
         print(f"[Executor] Reconcile warning (continuing): {e}")
+    return report
+
+
+def force_close_live_symbols(symbols: list[str], reason: str = "reconcile_orphan") -> list:
+    """
+    Close positions reported by Alpaca even when they are not tracked locally.
+    Used for startup reconciliation safe mode.
+    """
+    results = []
+    wanted = {_normalise(s) for s in symbols}
+    try:
+        live = _trading_client.get_all_positions()
+    except Exception as e:
+        return [{"symbol": s, "ok": False, "reason": reason, "error": str(e)} for s in sorted(wanted)]
+
+    live_by_symbol = {_normalise(p.symbol): p for p in live}
+
+    for symbol in sorted(wanted):
+        pos = live_by_symbol.get(symbol)
+        if not pos:
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "reason": reason,
+                "status": "already_flat",
+            })
+            continue
+
+        try:
+            qty = _to_order_qty(getattr(pos, "qty", 0))
+            if qty < _MIN_ORDER_QTY:
+                results.append({
+                    "symbol": symbol,
+                    "ok": True,
+                    "reason": reason,
+                    "status": "dust_qty",
+                })
+                continue
+
+            side = str(getattr(pos, "side", "long")).lower()
+            close_side = OrderSide.BUY if side == "short" else OrderSide.SELL
+            order = _trading_client.submit_order(MarketOrderRequest(
+                symbol=symbol,
+                qty=float(qty),
+                side=close_side,
+                time_in_force=TimeInForce.GTC,
+            ))
+
+            results.append({
+                "symbol": symbol,
+                "ok": True,
+                "reason": reason,
+                "status": str(order.status),
+                "order_id": str(order.id),
+                "qty": float(qty),
+            })
+            print(f"[Executor] Reconcile close submitted: {symbol} qty={float(qty):.6f} reason={reason}")
+        except Exception as e:
+            results.append({
+                "symbol": symbol,
+                "ok": False,
+                "reason": reason,
+                "error": str(e),
+            })
+            print(f"[Executor] Reconcile close failed for {symbol}: {e}")
+
+    return results
 
 
 # ── Public position queries ────────────────────────────────────────────────────
@@ -136,6 +245,7 @@ def get_open_position_summary() -> dict | None:
         "shares":       pos.get("shares"),
         "dollar_risk":  pos.get("dollar_risk"),
         "setup_type":   pos.get("setup_type"),
+        "timestamp_entry": pos.get("timestamp_entry"),
         "hours_held":   hours_held,
         "breakeven_moved": pos.get("stop_moved_to_be", False),
     }
@@ -151,7 +261,7 @@ def submit_entry(candidate, sizing: dict) -> dict | None:
         print(f"[Executor] Already in a position — skipping {symbol}.")
         return None
 
-    shares = sizing["shares"]
+    shares = float(_to_order_qty(sizing["shares"]))
     if shares < 0.000001:
         print(f"[Executor] Position size too small for {symbol} ({shares}).")
         return None
@@ -159,7 +269,7 @@ def submit_entry(candidate, sizing: dict) -> dict | None:
     try:
         order = _trading_client.submit_order(MarketOrderRequest(
             symbol=symbol,
-            qty=round(shares, 6),
+            qty=shares,
             side=OrderSide.BUY,
             time_in_force=TimeInForce.GTC,
         ))
@@ -264,17 +374,25 @@ def _close_position(symbol: str, exit_reason: str, exit_price: float) -> dict | 
         return None
 
     try:
-        order = _trading_client.submit_order(MarketOrderRequest(
-            symbol=symbol,
-            qty=round(pos["shares"], 6),
-            side=OrderSide.SELL,
-            time_in_force=TimeInForce.GTC,
-        ))
-        if str(order.status) in ("rejected", "canceled", "expired"):
-            print(f"[Executor] Close order {order.status.upper()} for {symbol}")
-            # Still clear the position to avoid being stuck
+        close_qty = float(_to_order_qty(pos["shares"]))
+        if close_qty < float(_MIN_ORDER_QTY):
+            print(f"[Executor] Close qty too small for {symbol}; clearing local tracking only.")
+            close_qty = None
+
+        if close_qty is not None:
+            order = _trading_client.submit_order(MarketOrderRequest(
+                symbol=symbol,
+                qty=close_qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+            ))
+            if str(order.status) in ("rejected", "canceled", "expired"):
+                print(f"[Executor] Close order {order.status.upper()} for {symbol}")
+                # Still clear the position to avoid being stuck
+            else:
+                print(f"[Executor] SELL {close_qty:.6f} {symbol} | order={order.id} | reason={exit_reason}")
         else:
-            print(f"[Executor] SELL {pos['shares']:.6f} {symbol} | order={order.id} | reason={exit_reason}")
+            print(f"[Executor] SELL skipped for {symbol} (dust quantity).")
     except Exception as e:
         print(f"[Executor] Close order failed for {symbol}: {e}")
 
@@ -299,12 +417,14 @@ def _close_position(symbol: str, exit_reason: str, exit_price: float) -> dict | 
 
 # ── Forced close (shutdown / health lockout) ───────────────────────────────────
 
-def force_close_all(reason: str = "shutdown") -> list:
+def force_close_all(reason: str = "shutdown", exit_prices: dict | None = None) -> list:
     """Force-close all open positions. Called on SIGTERM or organism death."""
+    exit_prices = exit_prices or {}
     closed = []
     for symbol in list(_open_positions.keys()):
         pos    = _open_positions[symbol]
-        result = _close_position(symbol, reason, pos["entry_price"])
+        exit_price = exit_prices.get(symbol, pos["entry_price"])
+        result = _close_position(symbol, reason, exit_price)
         if result:
             closed.append(result)
     return closed

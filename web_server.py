@@ -82,6 +82,42 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   .pill-starting { background: rgba(68,136,255,0.15); color: var(--blue);  border: 1px solid var(--blue); }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
   .last-update { color: var(--text-dim); font-size: 12px; font-family: 'Share Tech Mono', monospace; }
+  .runtime-meta {
+    margin: -6px 0 12px 2px;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 1px;
+  }
+  .stale-indicator {
+    display: none;
+    margin: 0 0 12px 0;
+    background: rgba(255, 68, 68, 0.15);
+    border: 1px solid var(--red);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #ffd7d7;
+    font-size: 12px;
+    font-family: 'Share Tech Mono', monospace;
+    letter-spacing: 1px;
+  }
+  .stale-indicator.show { display: block; }
+  .revision-watermark {
+    position: fixed;
+    right: 14px;
+    bottom: 10px;
+    z-index: 3000;
+    padding: 5px 9px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: rgba(17, 24, 39, 0.92);
+    color: #cdd5df;
+    font-size: 11px;
+    letter-spacing: 1px;
+    font-family: 'Share Tech Mono', monospace;
+    pointer-events: none;
+    opacity: 0.92;
+  }
 
   /* ── Grid ── */
   .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
@@ -310,6 +346,9 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div class="last-update">Updated: <span id="last-update">—</span></div>
 </div>
 
+<div id="runtime-meta" class="runtime-meta">Instance: -- | Source: -- | Host: -- | PID: --</div>
+<div id="stale-indicator" class="stale-indicator"></div>
+
 <!-- Bloomberg Ticker -->
 <div class="ticker-wrap">
   <div class="ticker-label">▶ LIVE</div>
@@ -405,7 +444,10 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
-<div class="footer">CREATURE / PAPER TRADING / 24-7 / AUTO-REFRESH 30s</div>
+<div class="footer">CREATURE / PAPER TRADING / 24-7 / AUTO-REFRESH 10s</div>
+<div class="revision-watermark">
+  REV <span id="revision-id">--</span> | <span id="revision-date">--</span> | <span id="revision-title">--</span>
+</div>
 
 <script>
 async function refresh() {
@@ -421,7 +463,7 @@ async function refresh() {
 // Show a live clock so the user knows the page is alive
 function liveClock() {
   const el = document.getElementById('last-update');
-  if (el && el.textContent === '—') {
+  if (el && (el.textContent === '—' || el.textContent === '--')) {
     el.textContent = 'connecting...';
   }
 }
@@ -433,19 +475,42 @@ function fmtPct(n) { return n !== null && n !== undefined ? Number(n).toFixed(1)
 function render(d) {
   // Header
   const health = d.health?.state || 'STARTING';
+  const runtimeStatus = d.status || 'STARTING';
   const pill = document.getElementById('status-pill');
   const statusMap = {
     'HEALTHY':'HUNTING','WOUNDED':'WOUNDED','SURVIVAL':'SURVIVAL',
-    'LOCKOUT':'LOCKOUT','DEAD':'DEAD','STARTING':'STARTING'
+    'LOCKOUT':'LOCKOUT','DEAD':'DEAD','STARTING':'STARTING',
+    'SAFE_MODE':'SAFE MODE','ONLINE':'ONLINE','STOPPING':'STOPPING'
   };
   const classMap = {
     'HEALTHY':'pill-hunting','WOUNDED':'pill-wounded','SURVIVAL':'pill-wounded',
-    'LOCKOUT':'pill-lockout','DEAD':'pill-dead','STARTING':'pill-starting'
+    'LOCKOUT':'pill-lockout','DEAD':'pill-dead','STARTING':'pill-starting',
+    'SAFE_MODE':'pill-lockout','ONLINE':'pill-hunting','STOPPING':'pill-wounded'
   };
-  pill.textContent = statusMap[health] || health;
-  pill.className   = 'status-pill ' + (classMap[health] || 'pill-starting');
+  const statusKey = runtimeStatus === 'ONLINE' ? health : runtimeStatus;
+  pill.textContent = statusMap[statusKey] || statusKey;
+  pill.className   = 'status-pill ' + (classMap[statusKey] || 'pill-starting');
+  const rev = d.revision || {};
+  document.getElementById('revision-id').textContent = rev.id || 'dev-local';
+  document.getElementById('revision-date').textContent = rev.date || 'n/a';
+  document.getElementById('revision-title').textContent = rev.title || 'revision';
+  const runtime = d.runtime || {};
+  const updatedAt = d.last_updated ? new Date(d.last_updated) : null;
+  const staleSeconds = updatedAt ? Math.max(0, Math.floor((Date.now() - updatedAt.getTime()) / 1000)) : null;
   document.getElementById('last-update').textContent =
-    d.last_updated ? new Date(d.last_updated).toLocaleTimeString() : '—';
+    updatedAt ? `${updatedAt.toLocaleTimeString()} (${staleSeconds}s ago)` : '--';
+  document.getElementById('runtime-meta').textContent =
+    `Instance: ${runtime.instance_id || 'n/a'} | Source: ${runtime.source || 'n/a'} | ` +
+    `Host: ${runtime.hostname || 'n/a'} | PID: ${runtime.pid || 'n/a'} | ` +
+    `Cycles: ${runtime.cycle_count ?? 0} | Phase: ${runtime.last_cycle_phase || 'n/a'}`;
+  const staleEl = document.getElementById('stale-indicator');
+  if (staleSeconds !== null && staleSeconds > 70) {
+    staleEl.textContent = `WARNING: dashboard data stale (${staleSeconds}s since last heartbeat).`;
+    staleEl.classList.add('show');
+  } else {
+    staleEl.textContent = '';
+    staleEl.classList.remove('show');
+  }
 
   // Balance
   const bal = d.balance || {};

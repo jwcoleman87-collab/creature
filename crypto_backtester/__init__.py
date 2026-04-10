@@ -40,6 +40,7 @@ def run(symbol: str, setup_type: str, bars: list) -> BacktestResult:
     max_hold   = get("risk.crypto.max_hold_hours",         8)
     z_thresh   = get("crypto.strategy.sub_strategies.momentum.z_score_entry_threshold", 1.5)
     rsi_os     = get("crypto.strategy.sub_strategies.mean_reversion.rsi_oversold",      35)
+    bb_entry_max = get("crypto.strategy.sub_strategies.mean_reversion.bb_entry_max",     20)
     atr_mult   = get("risk.crypto.stop_loss_atr_multiplier", 1.5)
     floor_pct  = get("risk.crypto.stop_loss_pct",            0.01)
 
@@ -60,7 +61,7 @@ def run(symbol: str, setup_type: str, bars: list) -> BacktestResult:
         if setup_type == "momentum_long":
             signal = _compute_z_score_4h(window) >= z_thresh
         elif setup_type == "mean_reversion_long":
-            signal = (_compute_bb_position(closes) <= 20.0 and _compute_rsi(closes) <= rsi_os)
+            signal = (_compute_bb_position(closes) <= bb_entry_max and _compute_rsi(closes) <= rsi_os)
         else:
             signal = False
 

@@ -7,7 +7,7 @@
 
 creature:
   name: "Creature"
-  version: "0.6.0"
+  version: "0.6.1"
   mode: "paper"                # NEVER change to 'live' without a full review
 
   # Decision cycle — the creature's brain (v2.0)
@@ -121,7 +121,7 @@ risk:
     stop_loss_atr_multiplier: 1.5  # Preferred: ATR × 1.5 (widens in volatile markets)
     take_profit_pct: 0.02        # 2% target (2:1 R/R)
     max_spread_pct: 0.50         # Skip any pair with spread > 0.5%
-    min_score_to_backtest: 3.0   # Scanner score threshold to proceed to TEST
+    min_score_to_backtest: 2.0   # Scanner score threshold to proceed to TEST
     scan_interval_seconds: 60    # LEARNING MODE: scan every 60s instead of 300s
     exit_check_seconds: 15       # LEARNING MODE: check exits every 15s
     max_hold_hours: 4            # LEARNING MODE: halved hold time — faster trade turnover
@@ -268,18 +268,19 @@ crypto:
     sub_strategies:
       momentum:
         z_score_lookback_bars: 42        # 7 days of 4h periods on 1h bars
-        z_score_entry_threshold: 1.5     # Z > 1.5 = strong momentum long
+        z_score_entry_threshold: 1.2     # Slightly looser in paper mode to increase opportunities
         adx_trending_threshold: 25       # ADX above this = trending regime
       mean_reversion:
         rsi_period: 14
-        rsi_oversold: 35                 # RSI below this = oversold long signal
+        rsi_oversold: 40                 # Slightly looser in paper mode to increase opportunities
+        bb_entry_max: 30                 # BB position threshold for mean-reversion long signal
         rsi_overbought: 65
         bb_period: 20
         bb_std: 2.0
         adx_ranging_threshold: 20        # ADX below this = ranging regime
       volume:
         lookback_bars: 20
-        min_vol_ratio: 1.2               # Current bar volume must exceed 120% of 20-bar avg
+        min_vol_ratio: 1.0               # Allow baseline volume in paper mode
 
   # ── Sentiment System (NEW v0.6.0) ──────────────────────
   sentiment:

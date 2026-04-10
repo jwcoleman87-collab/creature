@@ -323,10 +323,11 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
     # ── Signal (long only) ─────────────────────────────────────────────────────
     z_thresh    = get("crypto.strategy.sub_strategies.momentum.z_score_entry_threshold", 1.5)
     rsi_os      = get("crypto.strategy.sub_strategies.mean_reversion.rsi_oversold",      35)
+    bb_entry_max = get("crypto.strategy.sub_strategies.mean_reversion.bb_entry_max",     20)
     min_vol_r   = get("crypto.strategy.sub_strategies.volume.min_vol_ratio",             1.2)
 
     mom_signal = z_score >= z_thresh
-    mr_signal  = (bb_pos <= 20.0 and rsi <= rsi_os)
+    mr_signal  = (bb_pos <= bb_entry_max and rsi <= rsi_os)
 
     # ── Extreme Fear override ──────────────────────────────────────────────────
     # When sentiment is strongly fearful, unlock mean reversion even in a
