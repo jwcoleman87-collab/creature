@@ -274,6 +274,8 @@ crypto:
         rsi_period: 14
         rsi_oversold: 40                 # Slightly looser in paper mode to increase opportunities
         bb_entry_max: 30                 # BB position threshold for mean-reversion long signal
+        fear_dip_rsi_max: 60            # Fear-dip tier 2: RSI must be below this (not yet overbought)
+        fear_dip_z_min: -0.5            # Fear-dip tier 2: Z-score must be below this (still under selling pressure)
         rsi_overbought: 65
         bb_period: 20
         bb_std: 2.0

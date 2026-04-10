@@ -330,18 +330,33 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
     mr_signal  = (bb_pos <= bb_entry_max and rsi <= rsi_os)
 
     # ── Extreme Fear override ──────────────────────────────────────────────────
-    # When sentiment is strongly fearful, unlock mean reversion even in a
-    # trending (crashing) market. The crowd is panic-selling — the creature
-    # fades the crowd. Sentiment adj > 1.0 = strong contrarian buy signal.
+    # Two-tier contrarian system when the crowd is panicking:
+    #
+    #  Tier 1 — Classic MR (mr_signal): deeply oversold, BB near lower band.
+    #            Fires when RSI < rsi_oversold AND BB < bb_entry_max.
+    #
+    #  Tier 2 — Fear Dip (fear_dip_signal): post-panic, early-recovery window.
+    #            Fires when RSI < fear_dip_rsi_max (not yet overbought) AND
+    #            Z-score < fear_dip_z_min (still under 4h selling pressure).
+    #            Catches the bounce AFTER the worst selloff, before RSI
+    #            has recovered enough for Tier 1 to fire.
+    #
+    # Both tiers unlock across ALL regimes — trending, ranging, conflicted.
+    # The crowd is selling regardless of regime; the creature fades all of it.
     extreme_fear_override = sentiment_adj > 1.0   # F&G well below fear threshold
+
+    fear_rsi_max    = get("crypto.strategy.sub_strategies.mean_reversion.fear_dip_rsi_max", 60)
+    fear_z_min      = get("crypto.strategy.sub_strategies.mean_reversion.fear_dip_z_min",  -0.5)
+    fear_dip_signal = (rsi < fear_rsi_max and z_score < fear_z_min)
 
     print(f"[Scanner] {symbol}: ADX={adx:.1f} RSI={rsi:.1f} BB={bb_pos:.1f} "
           f"Z={z_score:.2f} vol={vol_ratio:.2f} regime={regime} "
-          f"mom={mom_signal} mr={mr_signal} fear_override={extreme_fear_override}")
+          f"mom={mom_signal} mr={mr_signal} dip={fear_dip_signal} fear={extreme_fear_override}")
 
-    if regime == "trending" and extreme_fear_override:
-        # In extreme fear, check mean reversion regardless of ADX trend
-        signal_ok  = mr_signal
+    if extreme_fear_override and (mr_signal or fear_dip_signal):
+        # Extreme fear unlocks contrarian buying in any regime.
+        # Label as crisis_bounce so score threshold is waived (backtest gates it).
+        signal_ok  = True
         setup_type = "mean_reversion_long"
         regime     = "crisis_bounce"
     elif regime == "trending":
@@ -350,7 +365,7 @@ def score_symbol(symbol: str, bars: list, sentiment_adj: float) -> SignalCandida
     elif regime == "ranging":
         signal_ok  = mr_signal
         setup_type = "mean_reversion_long"
-    else:
+    else:  # conflicted
         signal_ok  = mom_signal or mr_signal
         setup_type = "momentum_long" if mom_signal else "mean_reversion_long"
 
